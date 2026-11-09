@@ -32,6 +32,19 @@ type psLine struct {
 	RunningFor string `json:"RunningFor"`
 }
 
+func dockerError(err error) string {
+	msg := err.Error()
+	switch {
+	case strings.Contains(msg, "docker: not found"), strings.Contains(msg, "docker: command not found"):
+		return "节点未安装 Docker"
+	case strings.Contains(msg, "permission denied"):
+		return "当前 SSH 用户无权访问 Docker，请在节点设置中开启 sudo"
+	case strings.Contains(msg, "Cannot connect to the Docker daemon"):
+		return "无法连接 Docker 服务，请确认 Docker 正在运行"
+	}
+	return msg
+}
+
 func (s *Server) handleContainers(w http.ResponseWriter, r *http.Request) {
 	n, ok := s.node(w, r)
 	if !ok {
@@ -39,7 +52,7 @@ func (s *Server) handleContainers(w http.ResponseWriter, r *http.Request) {
 	}
 	out, err := n.OutputCtx(r.Context(), `docker ps -a --format '{{json .}}'`, 20*time.Second)
 	if err != nil {
-		writeJSON(w, http.StatusOK, map[string]any{"containers": []container{}, "error": err.Error()})
+		writeJSON(w, http.StatusOK, map[string]any{"containers": []container{}, "error": dockerError(err)})
 		return
 	}
 	list := make([]container, 0, 32)
@@ -104,7 +117,7 @@ func (s *Server) handleContainerStats(w http.ResponseWriter, r *http.Request) {
 	}
 	out, err := n.OutputCtx(r.Context(), `docker stats --no-stream --format '{{json .}}'`, 30*time.Second)
 	if err != nil {
-		writeJSON(w, http.StatusOK, map[string]any{"stats": []statLine{}, "error": err.Error()})
+		writeJSON(w, http.StatusOK, map[string]any{"stats": []statLine{}, "error": dockerError(err)})
 		return
 	}
 	list := make([]statLine, 0, 16)
@@ -165,7 +178,7 @@ func (s *Server) handleContainerAction(w http.ResponseWriter, r *http.Request) {
 	}
 	out, err := n.OutputCtx(r.Context(), cmd, 60*time.Second)
 	if err != nil {
-		writeErr(w, http.StatusBadGateway, "操作失败: "+err.Error())
+		writeErr(w, http.StatusBadGateway, "操作失败: "+dockerError(err))
 		return
 	}
 	s.audit.Add("admin", n.Config().ID, "容器."+req.Action, cid)
@@ -187,7 +200,7 @@ func (s *Server) handleImages(w http.ResponseWriter, r *http.Request) {
 	}
 	out, err := n.OutputCtx(r.Context(), `docker images --format '{{json .}}'`, 20*time.Second)
 	if err != nil {
-		writeJSON(w, http.StatusOK, map[string]any{"images": []imageItem{}, "error": err.Error()})
+		writeJSON(w, http.StatusOK, map[string]any{"images": []imageItem{}, "error": dockerError(err)})
 		return
 	}
 	var list []imageItem
@@ -228,7 +241,7 @@ func (s *Server) handleImagePrune(w http.ResponseWriter, r *http.Request) {
 	}
 	out, err := n.OutputCtx(r.Context(), `docker image prune -f`, 90*time.Second)
 	if err != nil {
-		writeErr(w, http.StatusBadGateway, "清理失败: "+err.Error())
+		writeErr(w, http.StatusBadGateway, "清理失败: "+dockerError(err))
 		return
 	}
 	s.audit.Add("admin", n.Config().ID, "镜像清理", "")

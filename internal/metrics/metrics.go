@@ -246,13 +246,23 @@ func (p *Processor) Next(out string, now time.Time) Snapshot {
 			}
 			snap.DockerTotal++
 		default:
-			if strings.Contains(l, "permission denied") || strings.Contains(l, "not found") ||
-				strings.Contains(l, "Cannot connect") || strings.Contains(l, "docker-not-found") {
+			switch {
+			case strings.Contains(l, "docker-not-found"), strings.Contains(l, "docker: not found"):
 				if dockerErr == "" {
-					dockerErr = l
+					dockerErr = "未安装 Docker"
 				}
-			} else if snap.DockerTotal < 0 {
-				snap.DockerTotal = 0
+			case strings.Contains(l, "permission denied"):
+				if dockerErr == "" {
+					dockerErr = "无权限访问 Docker（请在节点设置中开启 sudo）"
+				}
+			case strings.Contains(l, "Cannot connect"):
+				if dockerErr == "" {
+					dockerErr = "无法连接 Docker 服务"
+				}
+			default:
+				if snap.DockerTotal < 0 {
+					snap.DockerTotal = 0
+				}
 			}
 		}
 	}

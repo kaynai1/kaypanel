@@ -66,7 +66,7 @@ go build -o kaypanel .
 - 面板仅监听内网，或放在反向代理 / SSH 隧道之后，不要直接暴露到公网
 - 使用强密码，并定期轮换
 - SSH 节点建议使用专用密钥并限制权限
-- 审计日志位于 `data/audit.jsonl`
+- 审计日志位于 `data/audit.log`
 
 ## 许可
 
