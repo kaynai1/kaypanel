@@ -26,6 +26,7 @@ type Node struct {
 	FileRoot     string `yaml:"file_root" json:"file_root"`
 	StacksDir    string `yaml:"stacks_dir" json:"stacks_dir"`
 	HostKey      string `yaml:"host_key,omitempty" json:"host_key"`
+	SkipHostKey  bool   `yaml:"skip_host_key,omitempty" json:"skip_host_key"`
 	CreatedAt    string `yaml:"created_at,omitempty" json:"created_at"`
 }
 

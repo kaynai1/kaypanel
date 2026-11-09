@@ -412,6 +412,7 @@ type nodeReq struct {
 	Password     string `json:"password"`
 	Sudo         bool   `json:"sudo"`
 	SudoPassword string `json:"sudo_password"`
+	SkipHostKey  bool   `json:"skip_host_key"`
 	FileRoot     string `json:"file_root"`
 	StacksDir    string `json:"stacks_dir"`
 	KeyPath      string `json:"key_path"`
@@ -439,6 +440,7 @@ func (n nodeReq) config() config.Node {
 		Password:     n.Password,
 		Sudo:         n.Sudo,
 		SudoPassword: n.SudoPassword,
+		SkipHostKey:  n.SkipHostKey,
 		FileRoot:     n.FileRoot,
 		StacksDir:    n.StacksDir,
 	}

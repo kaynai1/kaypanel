@@ -20,6 +20,7 @@ type Config struct {
 	PrivateKey   string
 	Password     string
 	HostKey      string
+	SkipHostKey  bool
 	Sudo         bool
 	SudoPassword string
 }
@@ -93,6 +94,9 @@ func (c *Client) ensure() (*ssh.Client, error) {
 	hostKeyCB := func(hostname string, remote net.Addr, key ssh.PublicKey) error {
 		fp := ssh.FingerprintSHA256(key)
 		seenFP = fp
+		if c.cfg.SkipHostKey {
+			return nil
+		}
 		if c.cfg.HostKey == "" {
 			if c.onHostKey != nil {
 				c.onHostKey(fp)

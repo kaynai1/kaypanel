@@ -2052,6 +2052,10 @@ function renderNodeForm(sub) {
         <div class="field full hidden" id="noneField">
           <div class="hint">主机只认用户名、不校验密码或密钥（如 Instabox 的 ibssh_… 用户名）。连接时不会发送任何凭据。</div>
         </div>
+        <div class="field full">
+          <label class="check-row"><input type="checkbox" id="nodeSkipHostKey" ${n && n.skip_host_key ? 'checked' : ''}> 跳过主机指纹校验</label>
+          <div class="hint">仅用于 Instabox 这类每次连接指纹都会变化的主机；开启后不再校验主机身份。</div>
+        </div>
         <div class="field"><label>文件根目录</label><input type="text" id="nodeFileRoot" value="${esc(n ? n.file_root : '/')}" placeholder="/ 或 /vol1"></div>
         <div class="field"><label>Compose 应用目录</label><input type="text" id="nodeStacksDir" value="${esc(n ? n.stacks_dir : '')}" placeholder="留空使用 ~/kaypanel/stacks"></div>
         <div class="field full">
@@ -2140,6 +2144,7 @@ function renderNodeForm(sub) {
     password: $('#nodePassword') ? $('#nodePassword').value : '',
     sudo: $('#nodeSudo').checked,
     sudo_password: $('#nodeSudoPwd').value,
+    skip_host_key: $('#nodeSkipHostKey').checked,
     file_root: $('#nodeFileRoot').value.trim() || '/',
     stacks_dir: $('#nodeStacksDir').value.trim(),
   });

@@ -322,6 +322,7 @@ func toSSHConfig(c config.Node) sshx.Config {
 		PrivateKey:   c.PrivateKey,
 		Password:     c.Password,
 		HostKey:      c.HostKey,
+		SkipHostKey:  c.SkipHostKey,
 		Sudo:         c.Sudo,
 		SudoPassword: c.SudoPassword,
 	}
