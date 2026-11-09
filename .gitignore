@@ -1,7 +1,9 @@
+.tmp/
 data/
 dist/
-.tmp/
 *.exe
 *.log
+runs.json
+rel.json
 .DS_Store
 node_modules/
