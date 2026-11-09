@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"kaypanel/internal/alert"
 	"kaypanel/internal/api"
 	"kaypanel/internal/audit"
 	"kaypanel/internal/config"
@@ -33,7 +34,8 @@ type Instance struct {
 	InitialPassword string
 	DesktopToken    string
 
-	httpSrv *http.Server
+	alertCancel context.CancelFunc
+	httpSrv     *http.Server
 }
 
 func Start(opts Options) (*Instance, error) {
@@ -46,11 +48,13 @@ func Start(opts Options) (*Instance, error) {
 		return nil, fmt.Errorf("打开审计日志失败: %w", err)
 	}
 
-	mgr := node.NewManager(store)
+	mgr := node.NewManager(store, store.Dir())
 	mgr.Start()
+	alertCtx, alertCancel := context.WithCancel(context.Background())
+	alert.New(store, mgr).Start(alertCtx)
 
 	srv := api.New(store, mgr, auditLog, http.FS(opts.Web), opts.Version)
-	inst := &Instance{Store: store, Manager: mgr, InitialPassword: initialPassword}
+	inst := &Instance{Store: store, Manager: mgr, InitialPassword: initialPassword, alertCancel: alertCancel}
 	if opts.Desktop {
 		inst.DesktopToken = config.RandomHex(24)
 		srv.EnableDesktop(inst.DesktopToken)
@@ -62,6 +66,7 @@ func Start(opts Options) (*Instance, error) {
 	}
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
+		alertCancel()
 		mgr.Stop()
 		return nil, fmt.Errorf("监听 %s 失败: %w", addr, err)
 	}
@@ -94,6 +99,9 @@ func publicURL(addr string) string {
 }
 
 func (i *Instance) Shutdown(ctx context.Context) {
+	if i.alertCancel != nil {
+		i.alertCancel()
+	}
 	if i.httpSrv != nil {
 		_ = i.httpSrv.Shutdown(ctx)
 	}

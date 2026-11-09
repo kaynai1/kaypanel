@@ -1,6 +1,6 @@
 'use strict';
 
-const TOP_PAGES = ['overview', 'containers', 'apps', 'files', 'terminal', 'settings'];
+const TOP_PAGES = ['overview', 'containers', 'apps', 'files', 'terminal', 'ai', 'settings'];
 const $ = (sel, el = document) => el.querySelector(sel);
 const $$ = (sel, el = document) => Array.from(el.querySelectorAll(sel));
 
@@ -16,6 +16,9 @@ const state = {
   pageTimer: null,
   procTimer: null,
   nodeTimer: null,
+  wallTimer: null,
+  wallClock: null,
+  wallKey: null,
   overviewError: '',
   processes: [],
   procNode: '',
@@ -33,6 +36,10 @@ const state = {
   logs: null,
   audit: [],
   auditAt: 0,
+  hasWebhook: false,
+  hasAIKey: false,
+  aiMessages: [],
+  aiBusy: false,
   trendMetric: 'cpu',
   autoRefresh: prefOn('kp_auto'),
   procOn: prefOn('kp_proc'),
@@ -61,6 +68,9 @@ const ICON_PATHS = {
   chevron: '<path d="m6 9 6 6 6-6"/>',
   logout: '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5"/><path d="M21 12H9"/>',
   activity: '<path d="M3 12h4l2.4-7 4.8 14 2.4-7H21"/>',
+  wall: '<rect x="2.5" y="4" width="19" height="12.5" rx="2"/><path d="M8 20h8"/><path d="M12 16.5V20"/>',
+  expand: '<path d="M8 3H3v5"/><path d="M16 3h5v5"/><path d="M16 21h5v-5"/><path d="M8 21H3v-5"/>',
+  spark: '<path d="M12 3l1.8 4.9L19 10l-5.2 2.1L12 17l-1.8-4.9L5 10l5.2-2.1L12 3Z"/><path d="M18.5 15l.8 2.2L21.5 18l-2.2.8-.8 2.2-.8-2.2L15.5 18l2.2-.8.8-2.2Z"/>',
 };
 
 function ico(name, cls = '') {
@@ -251,6 +261,7 @@ function renderShell() {
         <div class="nav-group">工具</div>
         <button class="nav-item" data-page="files">${ico('folder')}<span>文件</span></button>
         <button class="nav-item" data-page="terminal">${ico('terminal')}<span>终端</span></button>
+        <button class="nav-item" data-page="ai">${ico('spark')}<span>AI 助手</span></button>
         <div class="nav-group">系统</div>
         <button class="nav-item" data-page="settings">${ico('settings')}<span>设置</span></button>
       </nav>
@@ -264,6 +275,7 @@ function renderShell() {
         <div class="node-switch" id="nodeSwitchWrap"></div>
         <div class="live-pill"><span class="live-dot"></span><span id="liveText">实时监控</span></div>
         <div class="top-right">
+          <button class="icon-btn" id="wallBtn" title="监控大屏">${ico('wall')}</button>
           <button class="icon-btn" id="topRefresh" title="刷新当前页">${ico('refresh')}</button>
           ${state.desktop ? '' : `<button class="icon-btn" id="logoutBtn" title="退出登录">${ico('logout')}</button>`}
         </div>
@@ -293,6 +305,7 @@ function renderShell() {
     if (!e.target.closest('#nodeSwitchWrap')) closeNodeMenu();
   });
   $('#topRefresh').addEventListener('click', refreshCurrentPage);
+  $('#wallBtn').addEventListener('click', () => navigate('wall'));
   if ($('#logoutBtn')) {
     $('#logoutBtn').addEventListener('click', async () => {
       try { await api('/api/logout', { method: 'POST', body: '{}' }); } catch (e) {}
@@ -370,7 +383,7 @@ function updateNodePills() {
 }
 
 function navigate(page) {
-  if (!TOP_PAGES.includes(page)) page = 'overview';
+  if (page !== 'wall' && !TOP_PAGES.includes(page)) page = 'overview';
   state.subview = null;
   state.page = page;
   const hash = '#/' + page;
@@ -383,6 +396,12 @@ function navigate(page) {
 
 function onRoute() {
   const p = (location.hash.replace(/^#\/?/, '') || 'overview');
+  if (p === 'wall') {
+    state.page = 'wall';
+    state.subview = null;
+    renderPage();
+    return;
+  }
   state.page = TOP_PAGES.includes(p) ? p : 'overview';
   state.subview = null;
   renderPage();
@@ -397,6 +416,7 @@ function selectNode(id) {
   state.fileNode = '';
   state.processes = [];
   state.procNode = '';
+  state.aiMessages = [];
   closeNodeMenu();
   updateTabs();
   updateNodePills();
@@ -412,12 +432,19 @@ function selectNode(id) {
 function cleanupPage() {
   if (state.pageTimer) { clearInterval(state.pageTimer); state.pageTimer = null; }
   if (state.procTimer) { clearInterval(state.procTimer); state.procTimer = null; }
+  if (state.wallTimer) { clearInterval(state.wallTimer); state.wallTimer = null; }
+  if (state.wallClock) { clearInterval(state.wallClock); state.wallClock = null; }
+  if (state.wallKey) { document.removeEventListener('keydown', state.wallKey); state.wallKey = null; }
+  const wall = $('#wallRoot');
+  if (wall) wall.remove();
+  document.body.classList.remove('wall-mode');
   closeLogDrawer();
   disposeTerminal();
 }
 
 function renderPage() {
   cleanupPage();
+  if (state.page === 'wall') return renderWall();
   const selNode = currentNode();
   if (selNode && selNode.sftp_only && ['containers', 'apps', 'terminal'].includes(state.page)) {
     state.page = 'files';
@@ -436,6 +463,7 @@ function renderPage() {
     case 'apps': return renderApps();
     case 'files': return renderFiles();
     case 'terminal': return renderTerminalPage();
+    case 'ai': return renderAI();
     case 'settings': return renderSettings();
     default: return renderOverview();
   }
@@ -454,6 +482,138 @@ function syncRail() {
   }
 }
 
+/* ---------- wall ---------- */
+
+function wallNodes() {
+  return state.nodes.filter(n => !n.sftp_only);
+}
+
+function wallClockText() {
+  const d = new Date();
+  const pad = v => String(v).padStart(2, '0');
+  return {
+    time: `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`,
+    date: `${d.getFullYear()}/${pad(d.getMonth() + 1)}/${pad(d.getDate())} 周${'日一二三四五六'[d.getDay()]}`,
+  };
+}
+
+function updateWallClock() {
+  const t = $('#wallTime'), d = $('#wallDate');
+  if (!t || !d) return;
+  const v = wallClockText();
+  t.textContent = v.time;
+  d.textContent = v.date;
+}
+
+function wallRing(percent, warn) {
+  const p = Math.max(0, Math.min(100, percent));
+  const r = 42, c = 2 * Math.PI * r;
+  const color = warn ? '#f87171' : p >= 75 ? '#fbbf24' : '#38bdf8';
+  return `<div class="wc-ring-wrap">
+    <svg class="wc-ring" viewBox="0 0 100 100">
+      <circle class="ring-track" cx="50" cy="50" r="${r}"/>
+      <circle class="ring-bar" cx="50" cy="50" r="${r}" stroke="${color}" stroke-dasharray="${c.toFixed(1)}" stroke-dashoffset="${(c * (1 - p / 100)).toFixed(1)}"/>
+    </svg>
+    <div class="wc-ring-num"><b>${p.toFixed(1)}</b><span>%</span><i>CPU</i></div>
+  </div>`;
+}
+
+function wallBar(label, p, detail, color, warn) {
+  const v = Math.max(0, Math.min(100, p));
+  return `<div class="wc-bar">
+    <div class="wc-bar-head"><span>${label}</span><b>${v.toFixed(0)}%</b></div>
+    <div class="wc-track"><i style="width:${v.toFixed(1)}%;background:${warn ? '#f87171' : color}"></i></div>
+    <div class="wc-bar-sub">${esc(detail)}</div>
+  </div>`;
+}
+
+function wallCard(n) {
+  const m = n.latest || {};
+  const cpu = n.online ? Number(m.cpu) || 0 : 0;
+  const memP = pct(m.mem_used, m.mem_total);
+  const diskP = pct(m.disk_used, m.disk_total);
+  const st = state.settings || {};
+  const cpuWarn = n.online && cpu >= (st.cpu_alert || 90);
+  const memWarn = n.online && memP >= (st.mem_alert || 90);
+  const diskWarn = n.online && diskP >= (st.disk_alert || 90);
+  const hist = (n.history || []).map(s => Number(s.cpu) || 0);
+  return `<article class="wall-card ${n.online ? 'online' : 'offline'}">
+    <div class="wc-head">
+      <span class="avatar" style="background:${avatarColor(n.id)}">${esc(initialOf(n.name))}</span>
+      <div class="wc-name"><b>${esc(n.name)}</b><span>${esc(m.os || (n.online ? '正在采集…' : n.error || '连接中断'))}</span></div>
+      <span class="wc-state ${n.online ? '' : 'off'}"><span class="dot"></span>${n.online ? '在线' : n.waking ? '唤醒中' : '离线'}</span>
+    </div>
+    ${n.online ? `
+    <div class="wc-main">
+      ${wallRing(cpu, cpuWarn)}
+      <div class="wc-bars">
+        ${wallBar('内存', memP, `${fmtBytes(m.mem_used)} / ${fmtBytes(m.mem_total)}`, '#a78bfa', memWarn)}
+        ${wallBar('磁盘', diskP, `${fmtBytes(m.disk_used)} / ${fmtBytes(m.disk_total)}`, '#34d399', diskWarn)}
+      </div>
+    </div>
+    <div class="wc-stats">
+      <div><span>下载</span><b>${fmtRate(m.net_rx)}</b></div>
+      <div><span>上传</span><b>${fmtRate(m.net_tx)}</b></div>
+      <div><span>负载</span><b>${(Number(m.load1) || 0).toFixed(2)}</b></div>
+      <div><span>温度</span><b>${m.temp > 0 ? m.temp.toFixed(0) + '°C' : '—'}</b></div>
+    </div>
+    <div class="wc-chart">${chartSVG([{ values: hist, color: cpuWarn ? '#f87171' : '#38bdf8', fill: true }], { height: 64, max: 100 })}</div>
+    ` : `<div class="wc-offline">
+      <b>${n.waking ? '正在唤醒' : '离线'}</b>
+      <span>${esc(n.waking ? 'Instabox 空闲休眠，正在自动唤醒…' : (n.error || 'SSH 连接失败'))}</span>
+    </div>`}
+  </article>`;
+}
+
+function drawWall() {
+  const grid = $('#wallGrid');
+  if (!grid) return;
+  const list = wallNodes();
+  const online = list.filter(n => n.online).length;
+  grid.innerHTML = list.length ? list.map(wallCard).join('') : `<div class="wall-empty">还没有服务器节点<br><span>添加节点后即可在这里挂机监控</span></div>`;
+  const count = $('#wallCount');
+  if (count) count.textContent = `${online} / ${list.length} 台在线 · 3 秒刷新`;
+}
+
+function renderWall() {
+  document.body.classList.add('wall-mode');
+  const v = wallClockText();
+  const root = document.createElement('div');
+  root.id = 'wallRoot';
+  root.className = 'wall';
+  root.innerHTML = `
+    <header class="wall-head">
+      <div class="wall-brand"><img src="/assets/logo.svg" alt=""><span>KayPanel 监控大屏</span><span class="wall-live"><i></i>LIVE</span></div>
+      <div class="wall-clock"><b id="wallTime">${v.time}</b><span id="wallDate">${v.date}</span></div>
+      <button class="wall-exit" id="wallFull" title="切换全屏">${ico('expand')}<span>全屏</span></button>
+      <button class="wall-exit" id="wallExit" title="退出大屏">退出 Esc</button>
+    </header>
+    <div class="wall-grid" id="wallGrid"></div>
+    <footer class="wall-foot"><span id="wallCount"></span><span>CPU / 内存 / 磁盘超过告警阈值时红色高亮</span></footer>`;
+  document.body.appendChild(root);
+  drawWall();
+  updateWallClock();
+  const exit = () => navigate('overview');
+  $('#wallExit').addEventListener('click', exit);
+  $('#wallFull').addEventListener('click', () => {
+    if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+    else document.documentElement.requestFullscreen().catch(() => {});
+  });
+  state.wallKey = e => { if (e.key === 'Escape' && !document.fullscreenElement) exit(); };
+  document.addEventListener('keydown', state.wallKey);
+  state.wallClock = setInterval(updateWallClock, 1000);
+  const refreshWall = async () => {
+    try {
+      const data = await api('/api/overview');
+      state.nodes = data.nodes || [];
+      state.settings = data.settings || state.settings;
+      drawWall();
+    } catch (e) { /* keep last frame */ }
+  };
+  if (!state.nodes.length) refreshWall();
+  state.wallTimer = setInterval(refreshWall, 3000);
+}
+
 /* ---------- overview ---------- */
 
 async function loadOverview(render = true) {
@@ -462,6 +622,8 @@ async function loadOverview(render = true) {
     state.overviewError = '';
     state.nodes = data.nodes || [];
     state.settings = data.settings || state.settings;
+    if (typeof data.has_webhook === 'boolean') state.hasWebhook = data.has_webhook;
+    if (typeof data.has_ai_key === 'boolean') state.hasAIKey = data.has_ai_key;
     if (data.version) state.version = data.version;
     ensureSelected();
     updateNodePills();
@@ -476,7 +638,7 @@ async function loadOverview(render = true) {
 }
 
 async function refreshNodesLight() {
-  if (state.page === 'overview' && !state.subview) return;
+  if ((state.page === 'overview' || state.page === 'wall') && !state.subview) return;
   try {
     const d = await api('/api/nodes?light=1');
     const list = d.nodes || [];
@@ -802,6 +964,7 @@ function drawOverview() {
     <section class="page-head">
       <div><h1>概览</h1><p class="page-sub">${todayCN()} · ${state.nodes.length ? `${online} / ${state.nodes.length} 台节点在线` : '尚未添加节点'}</p></div>
       <div class="head-actions">
+        <button class="btn sm" id="ovWall">${ico('wall', 'ico')}大屏</button>
         <button class="btn sm" id="ovRefresh">刷新</button>
         <button class="btn sm primary" id="ovAddNode">${ico('plus', 'ico')}添加节点</button>
       </div>
@@ -810,6 +973,8 @@ function drawOverview() {
 
   const refresh = $('#ovRefresh');
   if (refresh) refresh.addEventListener('click', () => loadOverview(true));
+  const wallBtn = $('#ovWall');
+  if (wallBtn) wallBtn.addEventListener('click', () => navigate('wall'));
   const addNode = $('#ovAddNode');
   if (addNode) addNode.addEventListener('click', () => openNodeForm(null));
   const tabs = $('#trendTabs');
@@ -1089,6 +1254,7 @@ function renderCtrRows() {
       (running || paused) ? `<button class="btn sm" data-act="stop" data-id="${esc(c.id)}" data-name="${esc(c.name)}">停止</button>` : '',
       (running || paused) ? `<button class="btn sm ghost" data-act="restart" data-id="${esc(c.id)}" data-name="${esc(c.name)}">重启</button>` : '',
       `<button class="btn sm ghost" data-act="logs" data-id="${esc(c.id)}" data-name="${esc(c.name)}">日志</button>`,
+      `<button class="btn sm ghost" data-act="update" data-id="${esc(c.id)}" data-name="${esc(c.name)}" data-image="${esc(c.image)}">更新</button>`,
       `<button class="btn sm danger" data-act="remove" data-id="${esc(c.id)}" data-name="${esc(c.name)}">删除</button>`,
     ].filter(Boolean).join('');
     return `<div class="ctr-row">
@@ -1117,6 +1283,22 @@ async function onContainerClick(e) {
   if (!n) return;
   const act = btn.dataset.act, id = btn.dataset.id, name = btn.dataset.name;
   if (act === 'logs') { openLogDrawer(n, id, name); return; }
+  if (act === 'update') {
+    const img = btn.dataset.image || '';
+    if (!await confirmDialog('更新容器', `将拉取镜像「${img}」并按原配置重建「${name}」，期间服务会短暂中断。`, '开始更新')) return;
+    btn.disabled = true;
+    btn.textContent = '更新中…';
+    try {
+      const d = await api(`/api/nodes/${n.id}/containers/${encodeURIComponent(id)}/update`, { method: 'POST', body: '{}' });
+      toast(firstLine(d.output) || '更新完成', 'success', 4000);
+      loadContainers();
+    } catch (err) {
+      toast(err.message, 'error', 8000);
+      btn.disabled = false;
+      btn.textContent = '更新';
+    }
+    return;
+  }
   if (act === 'remove') {
     if (!await confirmDialog('删除容器', `确定删除「${name}」吗？\n运行中的容器会被强制删除，容器数据卷不会被删除。`, '删除', true)) return;
   }
@@ -1829,22 +2011,181 @@ function connectTerminal(n) {
 
 /* ---------- settings ---------- */
 
-function renderSettings() {
+/* ---------- ai ---------- */
+
+function aiBubble(m) {
+  return `<div class="ai-msg ${m.role === 'user' ? 'user' : 'assistant'} ${m.error ? 'err' : ''}">
+    <div class="ai-role">${m.role === 'user' ? '我' : 'AI'}</div>
+    <div class="ai-text">${esc(m.content)}</div>
+  </div>`;
+}
+
+function aiChatHTML() {
+  const n = currentNode();
+  if (!state.aiMessages.length) {
+    const samples = ['这台机器现在有什么异常？', 'CPU / 内存占用高，可能是什么原因？', '帮我看看哪些进程最吃资源？', '磁盘快满了，怎么安全清理？'];
+    return `<div class="ai-empty">
+      <div class="ai-empty-title">${n ? esc(n.name) + ' · 实时上下文已就绪' : '请选择一个节点'}</div>
+      <p>AI 会读取当前节点的指标、进程和容器列表用于分析，不会执行命令。</p>
+      <div class="ai-samples">${samples.map(q => `<button type="button" class="ai-sample" data-q="${esc(q)}">${esc(q)}</button>`).join('')}</div>
+    </div>`;
+  }
+  return state.aiMessages.map(aiBubble).join('') +
+    (state.aiBusy ? `<div class="ai-msg assistant"><div class="ai-role">AI</div><div class="ai-text ai-thinking">思考中…</div></div>` : '');
+}
+
+function renderAIChat() {
+  const box = $('#aiChat');
+  if (!box) return;
+  box.innerHTML = aiChatHTML();
+  box.scrollTop = box.scrollHeight;
+}
+
+async function sendAI(text) {
+  if (state.aiBusy) return;
+  const q = String(text || '').trim();
+  if (!q) return;
+  const n = currentNode();
+  if (!n) { toast('请先选择节点', 'error'); return; }
+  state.aiMessages.push({ role: 'user', content: q });
+  state.aiBusy = true;
+  renderAIChat();
+  if ($('#aiSend')) $('#aiSend').disabled = true;
+  try {
+    const history = state.aiMessages.filter(m => !m.error).slice(-12);
+    const d = await api('/api/ai/chat', { method: 'POST', body: JSON.stringify({ node_id: n.id, messages: history }) });
+    state.aiMessages.push({ role: 'assistant', content: d.reply || '（空回复）' });
+  } catch (e) {
+    state.aiMessages.push({ role: 'assistant', content: e.message, error: true });
+  }
+  state.aiBusy = false;
+  renderAIChat();
+  if ($('#aiSend')) $('#aiSend').disabled = false;
+  if ($('#aiInput')) $('#aiInput').focus();
+}
+
+function renderAI() {
+  const n = currentNode();
   const page = $('#page');
   page.innerHTML = `
     <section class="page-head">
-      <div><h1>设置</h1><p class="page-sub">账号、告警阈值与节点管理</p></div>
+      <div><h1>AI 助手</h1><p class="page-sub">${n ? esc(n.name) + ' · ' + esc(n.addr) : '选择节点后提问'}</p></div>
+      <div class="head-actions">
+        <button class="btn sm ghost" id="aiClear">清空对话</button>
+        <button class="btn sm" id="aiSettings">AI 设置</button>
+      </div>
+    </section>
+    ${state.hasAIKey ? '' : '<div class="banner warn">尚未配置 AI 接口，请先在「设置 → AI 运维助手」填写 Base URL、模型和 API Key。</div>'}
+    <div class="card ai-card">
+      <div class="ai-chat" id="aiChat">${aiChatHTML()}</div>
+      <div class="ai-input">
+        <textarea id="aiInput" rows="2" placeholder="例如：这台机器为什么变慢？需要注意什么？"></textarea>
+        <button class="btn primary" id="aiSend" ${state.aiBusy ? 'disabled' : ''}>发送</button>
+      </div>
+      <div class="ai-hint">AI 只读取指标、进程与容器信息用于分析，不会在服务器上执行任何命令。</div>
+    </div>`;
+  $('#aiClear').addEventListener('click', () => { state.aiMessages = []; renderAIChat(); });
+  $('#aiSettings').addEventListener('click', () => navigate('settings'));
+  $('#aiSend').addEventListener('click', () => { const el = $('#aiInput'); sendAI(el.value); el.value = ''; });
+  $('#aiInput').addEventListener('keydown', e => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); const el = e.target; sendAI(el.value); el.value = ''; }
+  });
+  $('#aiChat').addEventListener('click', e => {
+    const b = e.target.closest('[data-q]');
+    if (b) sendAI(b.dataset.q);
+  });
+  renderAIChat();
+}
+
+function settingsPayload(extra) {
+  const s = state.settings || {};
+  const num = (sel, fallback) => {
+    const el = $(sel);
+    const v = el ? Number(el.value) : Number(fallback);
+    return Number.isFinite(v) ? v : fallback;
+  };
+  const payload = {
+    cpu_alert: num('#thCpu', s.cpu_alert || 90),
+    mem_alert: num('#thMem', s.mem_alert || 90),
+    disk_alert: num('#thDisk', s.disk_alert || 90),
+    daily_report: $('#dailyOn') ? $('#dailyOn').checked : !!s.daily_report,
+    daily_hour: num('#dailyHour', s.daily_hour == null ? 8 : s.daily_hour),
+    ai_base: $('#aiBase') ? $('#aiBase').value.trim() : (s.ai_base || ''),
+    ai_model: $('#aiModel') ? $('#aiModel').value.trim() : (s.ai_model || ''),
+  };
+  if ($('#webhookUrl') && $('#webhookUrl').value.trim()) payload.webhook = $('#webhookUrl').value.trim();
+  if ($('#aiKey') && $('#aiKey').value.trim()) payload.ai_key = $('#aiKey').value.trim();
+  return Object.assign(payload, extra || {});
+}
+
+async function saveSettings(payload, okText) {
+  if (![payload.cpu_alert, payload.mem_alert, payload.disk_alert].every(v => v >= 1 && v <= 100)) {
+    toast('阈值需在 1-100 之间', 'error');
+    return false;
+  }
+  try {
+    await api('/api/settings', { method: 'PUT', body: JSON.stringify(payload) });
+    state.settings = Object.assign({}, state.settings, {
+      cpu_alert: payload.cpu_alert, mem_alert: payload.mem_alert, disk_alert: payload.disk_alert,
+      daily_report: payload.daily_report, daily_hour: payload.daily_hour,
+      ai_base: payload.ai_base, ai_model: payload.ai_model,
+    });
+    if (payload.webhook) state.hasWebhook = true;
+    if (payload.clear_webhook) state.hasWebhook = false;
+    if (payload.ai_key) state.hasAIKey = true;
+    if (payload.clear_ai_key) state.hasAIKey = false;
+    toast(okText || '已保存', 'success');
+    return true;
+  } catch (e) {
+    toast(e.message, 'error', 6000);
+    return false;
+  }
+}
+
+function renderSettings() {
+  const page = $('#page');
+  const hour = Number(state.settings.daily_hour);
+  const dailyHour = Number.isFinite(hour) ? hour : 8;
+  const hourOptions = Array.from({ length: 24 }, (_, h) =>
+    `<option value="${h}" ${h === dailyHour ? 'selected' : ''}>${String(h).padStart(2, '0')}:00</option>`).join('');
+  page.innerHTML = `
+    <section class="page-head">
+      <div><h1>设置</h1><p class="page-sub">告警推送、AI、账号与节点管理</p></div>
     </section>
     <div class="settings-grid">
       <div class="card settings-card">
         <h2>告警阈值</h2>
-        <p class="sub">超过阈值时，概览页的节点卡片会高亮提示</p>
+        <p class="sub">超过阈值时节点卡片高亮，并可通过 Webhook 推送</p>
         <div class="form-grid">
           <div class="field"><label>CPU %</label><input type="number" id="thCpu" min="1" max="100" value="${Number(state.settings.cpu_alert) || 90}"></div>
           <div class="field"><label>内存 %</label><input type="number" id="thMem" min="1" max="100" value="${Number(state.settings.mem_alert) || 90}"></div>
           <div class="field"><label>磁盘 %</label><input type="number" id="thDisk" min="1" max="100" value="${Number(state.settings.disk_alert) || 90}"></div>
         </div>
         <button class="btn" id="saveThresholds">保存阈值</button>
+      </div>
+      <div class="card settings-card">
+        <h2>通知推送</h2>
+        <p class="sub">支持企业微信、钉钉、飞书、Slack、Discord 与自定义 Webhook，阈值告警只推一次、恢复时再通知</p>
+        <div class="form-grid">
+          <div class="field full"><label>Webhook 地址</label><input id="webhookUrl" autocomplete="off" placeholder="${state.hasWebhook ? '已配置，留空保持不变' : 'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=...'}"></div>
+          <div class="field"><label>每日早报</label><label class="check"><input type="checkbox" id="dailyOn" ${state.settings.daily_report ? 'checked' : ''}>每天推送近 12 小时概况</label></div>
+          <div class="field"><label>推送时间</label><select id="dailyHour">${hourOptions}</select></div>
+        </div>
+        <div class="head-actions">
+          <button class="btn" id="saveNotify">保存通知设置</button>
+          <button class="btn ghost" id="testNotify">测试推送</button>
+          ${state.hasWebhook ? '<button class="btn sm ghost" id="clearWebhook">清除 Webhook</button>' : ''}
+        </div>
+      </div>
+      <div class="card settings-card">
+        <h2>AI 运维助手</h2>
+        <p class="sub">OpenAI 兼容接口，Base URL 填到 /v1 为止；Key 只保存在本机配置中</p>
+        <div class="form-grid">
+          <div class="field full"><label>Base URL</label><input id="aiBase" autocomplete="off" value="${esc(state.settings.ai_base || '')}" placeholder="https://api.example.com/v1"></div>
+          <div class="field"><label>模型</label><input id="aiModel" autocomplete="off" value="${esc(state.settings.ai_model || '')}" placeholder="gpt-4o-mini"></div>
+          <div class="field"><label>API Key</label><input type="password" id="aiKey" autocomplete="new-password" placeholder="${state.hasAIKey ? '已配置，留空保持不变' : 'sk-...'}"></div>
+        </div>
+        <button class="btn" id="saveAI">保存 AI 设置</button>
       </div>
       <div class="card settings-card">
         <h2>修改密码</h2>
@@ -1873,7 +2214,8 @@ function renderSettings() {
         <p class="sub">KayPanel ${esc(state.version || 'dev')} · 单二进制多机面板 · SSH 架构，无 Agent</p>
         <div class="info-list">
           <div class="info-row"><span>当前节点</span><span>${state.nodes.length} 台</span></div>
-          <div class="info-row"><span>数据目录</span><span>${state.desktop ? 'AppData\\Roaming\\KayPanel' : 'data/'}（config.yaml、audit.log）</span></div>
+          <div class="info-row"><span>数据目录</span><span>${state.desktop ? 'AppData\\Roaming\\KayPanel' : 'data/'}（config.yaml、audit.log、history.json）</span></div>
+          <div class="info-row"><span>手机访问</span><span>浏览器打开面板后选择「添加到主屏幕」即可像 App 一样使用</span></div>
           <div class="info-row"><span>项目仓库</span><span><a href="https://github.com/kaynai1/kaypanel" target="_blank" rel="noreferrer">github.com/kaynai1/kaypanel</a></span></div>
         </div>
       </div>
@@ -1881,14 +2223,25 @@ function renderSettings() {
 
   renderNodeList();
   $('#addNodeBtn').addEventListener('click', () => openNodeForm(null));
-  $('#saveThresholds').addEventListener('click', async () => {
-    const cpu = Number($('#thCpu').value), mem = Number($('#thMem').value), disk = Number($('#thDisk').value);
-    if (![cpu, mem, disk].every(v => v >= 1 && v <= 100)) { toast('阈值需在 1-100 之间', 'error'); return; }
+  $('#saveThresholds').addEventListener('click', () => saveSettings(settingsPayload(), '阈值已保存'));
+  $('#saveNotify').addEventListener('click', () => saveSettings(settingsPayload(), '通知设置已保存'));
+  $('#saveAI').addEventListener('click', () => saveSettings(settingsPayload(), 'AI 设置已保存'));
+  $('#testNotify').addEventListener('click', async () => {
+    const btn = $('#testNotify');
+    btn.disabled = true;
     try {
-      await api('/api/settings', { method: 'PUT', body: JSON.stringify({ cpu_alert: cpu, mem_alert: mem, disk_alert: disk }) });
-      state.settings = { cpu_alert: cpu, mem_alert: mem, disk_alert: disk };
-      toast('阈值已保存', 'success');
-    } catch (e) { toast(e.message, 'error'); }
+      const hook = $('#webhookUrl').value.trim();
+      const d = await api('/api/notify/test', { method: 'POST', body: JSON.stringify(hook ? { webhook: hook } : {}) });
+      toast('测试消息已发送', 'success');
+    } catch (e) {
+      toast(e.message, 'error', 7000);
+    }
+    btn.disabled = false;
+  });
+  const clearHook = $('#clearWebhook');
+  if (clearHook) clearHook.addEventListener('click', async () => {
+    if (!await confirmDialog('清除 Webhook', '清除后阈值告警与每日早报将停止推送，确定继续？', '清除', true)) return;
+    if (await saveSettings(settingsPayload({ clear_webhook: true }), 'Webhook 已清除')) renderSettings();
   });
   $('#savePassword').addEventListener('click', async () => {
     const oldPwd = $('#pwdOld') ? $('#pwdOld').value : '', newPwd = $('#pwdNew').value, newPwd2 = $('#pwdNew2').value;
@@ -2432,6 +2785,8 @@ async function boot() {
     state.desktop = !!me.desktop;
     state.version = me.version || '';
     state.settings = me.settings || state.settings;
+    state.hasWebhook = !!me.has_webhook;
+    state.hasAIKey = !!me.has_ai_key;
   } catch (e) {
     showLogin();
     return;
@@ -2442,6 +2797,10 @@ async function boot() {
   if (!location.hash) history.replaceState(null, '', '#/overview');
   onRoute();
   state.nodeTimer = setInterval(refreshNodesLight, 30000);
+}
+
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('/sw.js').catch(() => {});
 }
 
 boot();

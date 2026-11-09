@@ -65,23 +65,34 @@ type Node struct {
 
 type Manager struct {
 	store *config.Store
+	dir   string
+
+	histCtx    context.Context
+	histCancel context.CancelFunc
 
 	mu    sync.RWMutex
 	nodes map[string]*Node
 	order []string
 }
 
-func NewManager(store *config.Store) *Manager {
-	return &Manager{store: store, nodes: map[string]*Node{}}
+func NewManager(store *config.Store, dataDir string) *Manager {
+	return &Manager{store: store, dir: dataDir, nodes: map[string]*Node{}}
 }
 
 func (m *Manager) Start() {
+	hist := m.loadHistory()
 	for _, cfg := range m.store.Nodes() {
-		m.startNode(cfg)
+		m.startNode(cfg, hist[cfg.ID])
 	}
+	m.histCtx, m.histCancel = context.WithCancel(context.Background())
+	go m.historyLoop(m.histCtx)
 }
 
 func (m *Manager) Stop() {
+	if m.histCancel != nil {
+		m.histCancel()
+	}
+	m.saveHistory()
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for _, n := range m.nodes {
@@ -90,9 +101,9 @@ func (m *Manager) Stop() {
 	}
 }
 
-func (m *Manager) startNode(cfg config.Node) {
+func (m *Manager) startNode(cfg config.Node, hist []metrics.Snapshot) {
 	ctx, cancel := context.WithCancel(context.Background())
-	n := &Node{cfg: cfg, ctx: ctx, cancel: cancel, store: m.store}
+	n := &Node{cfg: cfg, ctx: ctx, cancel: cancel, store: m.store, hist: capHistory(hist)}
 	m.mu.Lock()
 	m.nodes[cfg.ID] = n
 	m.order = append(m.order, cfg.ID)
@@ -127,7 +138,7 @@ func (m *Manager) Add(c config.Node) (config.Node, error) {
 	if err != nil {
 		return c, err
 	}
-	m.startNode(c)
+	m.startNode(c, nil)
 	if err := m.persist(); err != nil {
 		return c, err
 	}
@@ -190,7 +201,11 @@ func (m *Manager) Delete(id string) error {
 		}
 	}
 	m.mu.Unlock()
-	return m.persist()
+	if err := m.persist(); err != nil {
+		return err
+	}
+	m.saveHistory()
+	return nil
 }
 
 func (m *Manager) persist() error {

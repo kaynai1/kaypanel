@@ -38,6 +38,14 @@ type Settings struct {
 	CPUAlert  int `yaml:"cpu_alert" json:"cpu_alert"`
 	MemAlert  int `yaml:"mem_alert" json:"mem_alert"`
 	DiskAlert int `yaml:"disk_alert" json:"disk_alert"`
+
+	Webhook     string `yaml:"webhook,omitempty" json:"-"`
+	DailyReport bool   `yaml:"daily_report,omitempty" json:"daily_report"`
+	DailyHour   int    `yaml:"daily_hour,omitempty" json:"daily_hour"`
+
+	AIBase  string `yaml:"ai_base,omitempty" json:"ai_base"`
+	AIModel string `yaml:"ai_model,omitempty" json:"ai_model"`
+	AIKey   string `yaml:"ai_key,omitempty" json:"-"`
 }
 
 type Config struct {
@@ -107,12 +115,20 @@ func Open(path string) (*Store, string, error) {
 		s.cfg.Settings.DiskAlert = 90
 		changed = true
 	}
+	if s.cfg.Settings.DailyHour == 0 && !s.cfg.Settings.DailyReport {
+		s.cfg.Settings.DailyHour = 8
+		changed = true
+	}
 	if changed {
 		if err := s.saveLocked(); err != nil {
 			return nil, "", err
 		}
 	}
 	return s, "", nil
+}
+
+func (s *Store) Dir() string {
+	return filepath.Dir(s.path)
 }
 
 func (s *Store) Listen() string {

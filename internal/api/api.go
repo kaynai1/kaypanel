@@ -67,6 +67,8 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/password", s.auth(s.handlePassword))
 	mux.Handle("GET /api/settings", s.auth(s.handleGetSettings))
 	mux.Handle("PUT /api/settings", s.auth(s.handleSetSettings))
+	mux.Handle("POST /api/notify/test", s.auth(s.handleNotifyTest))
+	mux.Handle("POST /api/ai/chat", s.auth(s.handleAIChat))
 	mux.Handle("GET /api/audit", s.auth(s.handleAudit))
 	mux.Handle("GET /api/overview", s.auth(s.handleOverview))
 	mux.Handle("GET /api/templates", s.auth(s.handleTemplates))
@@ -83,6 +85,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/nodes/{id}/containers", s.auth(s.handleContainers))
 	mux.Handle("GET /api/nodes/{id}/containers/stats", s.auth(s.handleContainerStats))
 	mux.Handle("POST /api/nodes/{id}/containers/{cid}/action", s.auth(s.handleContainerAction))
+	mux.Handle("POST /api/nodes/{id}/containers/{cid}/update", s.auth(s.handleContainerUpdate))
 	mux.Handle("GET /api/nodes/{id}/images", s.auth(s.handleImages))
 	mux.Handle("POST /api/nodes/{id}/images/prune", s.auth(s.handleImagePrune))
 
@@ -141,6 +144,12 @@ func (s *Server) serveStatic(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "public, max-age=86400")
 	} else {
 		w.Header().Set("Cache-Control", "no-store")
+	}
+	switch p {
+	case "/manifest.webmanifest":
+		w.Header().Set("Content-Type", "application/manifest+json")
+	case "/sw.js":
+		w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
 	}
 	http.FileServer(s.web).ServeHTTP(w, r)
 }
@@ -281,10 +290,13 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
+	set := s.store.Settings()
 	writeJSON(w, http.StatusOK, map[string]any{
 		"authenticated": true,
 		"version":       s.version,
-		"settings":      s.store.Settings(),
+		"settings":      set,
+		"has_webhook":   strings.TrimSpace(set.Webhook) != "",
+		"has_ai_key":    strings.TrimSpace(set.AIKey) != "",
 		"desktop":       s.desktopToken != "",
 	})
 }
@@ -317,29 +329,94 @@ func (s *Server) handlePassword(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
+	set := s.store.Settings()
 	writeJSON(w, http.StatusOK, map[string]any{
-		"settings": s.store.Settings(),
-		"version":  s.version,
+		"settings":    set,
+		"has_webhook": strings.TrimSpace(set.Webhook) != "",
+		"has_ai_key":  strings.TrimSpace(set.AIKey) != "",
+		"version":     s.version,
 	})
 }
 
+type settingsReq struct {
+	CPUAlert     int    `json:"cpu_alert"`
+	MemAlert     int    `json:"mem_alert"`
+	DiskAlert    int    `json:"disk_alert"`
+	Webhook      string `json:"webhook"`
+	ClearWebhook bool   `json:"clear_webhook"`
+	DailyReport  bool   `json:"daily_report"`
+	DailyHour    int    `json:"daily_hour"`
+	AIBase       string `json:"ai_base"`
+	AIModel      string `json:"ai_model"`
+	AIKey        string `json:"ai_key"`
+	ClearAIKey   bool   `json:"clear_ai_key"`
+}
+
+func validHTTPURL(v string) bool {
+	u, err := url.Parse(v)
+	return err == nil && (u.Scheme == "http" || u.Scheme == "https") && u.Host != ""
+}
+
 func (s *Server) handleSetSettings(w http.ResponseWriter, r *http.Request) {
-	var cfg config.Settings
-	if err := readJSON(r, &cfg); err != nil {
+	var req settingsReq
+	if err := readJSON(r, &req); err != nil {
 		writeErr(w, http.StatusBadRequest, "请求格式错误")
 		return
 	}
-	for _, v := range []int{cfg.CPUAlert, cfg.MemAlert, cfg.DiskAlert} {
+	for _, v := range []int{req.CPUAlert, req.MemAlert, req.DiskAlert} {
 		if v < 1 || v > 100 {
 			writeErr(w, http.StatusBadRequest, "阈值需在 1-100 之间")
 			return
 		}
 	}
+	if req.DailyHour < 0 || req.DailyHour > 23 {
+		writeErr(w, http.StatusBadRequest, "早报时间需在 0-23 点之间")
+		return
+	}
+	old := s.store.Settings()
+	cfg := config.Settings{
+		CPUAlert:    req.CPUAlert,
+		MemAlert:    req.MemAlert,
+		DiskAlert:   req.DiskAlert,
+		DailyReport: req.DailyReport,
+		DailyHour:   req.DailyHour,
+	}
+	cfg.Webhook = old.Webhook
+	if req.ClearWebhook {
+		cfg.Webhook = ""
+	} else if v := strings.TrimSpace(req.Webhook); v != "" {
+		if !validHTTPURL(v) {
+			writeErr(w, http.StatusBadRequest, "Webhook 需为 http(s) 地址")
+			return
+		}
+		cfg.Webhook = v
+	}
+	cfg.AIBase = old.AIBase
+	if v := strings.TrimRight(strings.TrimSpace(req.AIBase), "/"); v != "" {
+		if !validHTTPURL(v) {
+			writeErr(w, http.StatusBadRequest, "AI Base URL 需为 http(s) 地址")
+			return
+		}
+		cfg.AIBase = v
+	} else {
+		cfg.AIBase = ""
+	}
+	cfg.AIModel = strings.TrimSpace(req.AIModel)
+	cfg.AIKey = old.AIKey
+	if req.ClearAIKey {
+		cfg.AIKey = ""
+	} else if v := strings.TrimSpace(req.AIKey); v != "" {
+		cfg.AIKey = v
+	}
+	if cfg.AIBase != "" && cfg.AIKey != "" && cfg.AIModel == "" {
+		writeErr(w, http.StatusBadRequest, "使用 AI 助手需要填写模型名称")
+		return
+	}
 	if err := s.store.SetSettings(cfg); err != nil {
 		writeErr(w, http.StatusInternalServerError, "保存失败: "+err.Error())
 		return
 	}
-	s.audit.Add("admin", "", "修改告警阈值", "")
+	s.audit.Add("admin", "", "修改设置", "")
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
@@ -366,9 +443,11 @@ func (s *Server) handleOverview(w http.ResponseWriter, r *http.Request) {
 		out = append(out, overviewNode{View: v, Alerts: computeAlerts(v, set)})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"nodes":    out,
-		"settings": set,
-		"version":  s.version,
+		"nodes":       out,
+		"settings":    set,
+		"has_webhook": strings.TrimSpace(set.Webhook) != "",
+		"has_ai_key":  strings.TrimSpace(set.AIKey) != "",
+		"version":     s.version,
 	})
 }
 
