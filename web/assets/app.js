@@ -2250,59 +2250,68 @@ function renderSettings() {
         <button class="btn sm ghost" data-jump="setAudit">日志</button>
       </div>
     </section>
-    <div class="settings-grid">
-      <div class="card settings-card" id="setThresholds">
-        ${settingHead('activity', '告警阈值', '超过阈值时节点卡片高亮，并可通过 Webhook 推送')}
-        <div class="form-grid three">
-          <div class="field"><label>CPU %</label><input type="number" id="thCpu" min="1" max="100" value="${Number(state.settings.cpu_alert) || 90}"></div>
-          <div class="field"><label>内存 %</label><input type="number" id="thMem" min="1" max="100" value="${Number(state.settings.mem_alert) || 90}"></div>
-          <div class="field"><label>磁盘 %</label><input type="number" id="thDisk" min="1" max="100" value="${Number(state.settings.disk_alert) || 90}"></div>
-        </div>
-        <button class="btn" id="saveThresholds">保存阈值</button>
-      </div>
-      <div class="card settings-card" id="setPwd">
-        ${settingHead('key', '修改密码', state.desktop ? '桌面版已自动登录；设置密码后也可在本机浏览器中登录' : '密码用于登录面板，不会修改服务器 SSH 密码')}
-        <div class="form-grid">
-          ${state.desktop ? '' : '<div class="field full"><label>当前密码</label><input type="password" id="pwdOld" autocomplete="current-password"></div>'}
-          <div class="field"><label>新密码</label><input type="password" id="pwdNew" autocomplete="new-password"></div>
-          <div class="field"><label>确认新密码</label><input type="password" id="pwdNew2" autocomplete="new-password"></div>
-        </div>
-        <button class="btn" id="savePassword">更新密码</button>
-      </div>
-      <div class="card settings-card" id="setNotify">
-        ${settingHead('bell', '通知推送', '支持企业微信、钉钉、飞书、Bark、Server酱、PushPlus、ntfy、Gotify、Telegram、Slack、Discord 与自定义 Webhook，阈值告警只推一次、恢复时再通知')}
-        <div class="form-grid">
-          <div class="field full">
-            <label>Webhook 地址</label>
-            <input type="text" id="webhookUrl" autocomplete="off" placeholder="${state.hasWebhook ? '已配置，留空保持不变' : 'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=...'}">
-            <div class="hint">企业微信 / 钉钉 / 飞书 / Slack / Discord 粘贴机器人 Webhook；手机推送：Bark 填 https://api.day.app/设备Key，Server酱 填 https://sctapi.ftqq.com/SENDKEY.send，PushPlus 填 https://www.pushplus.plus/send?token=TOKEN，ntfy 填 https://ntfy.sh/主题，Gotify 填 https://你的域名/message?token=TOKEN，Telegram 填 https://api.telegram.org/botTOKEN/sendMessage?chat_id=ID</div>
+    <div class="settings-cols">
+      <div class="settings-col">
+        <div class="card settings-card" id="setThresholds">
+          ${settingHead('activity', '告警阈值', '超过阈值时节点卡片高亮，并可通过 Webhook 推送')}
+          <div class="form-grid three">
+            <div class="field"><label>CPU %</label><input type="number" id="thCpu" min="1" max="100" value="${Number(state.settings.cpu_alert) || 90}"></div>
+            <div class="field"><label>内存 %</label><input type="number" id="thMem" min="1" max="100" value="${Number(state.settings.mem_alert) || 90}"></div>
+            <div class="field"><label>磁盘 %</label><input type="number" id="thDisk" min="1" max="100" value="${Number(state.settings.disk_alert) || 90}"></div>
           </div>
-          <div class="field"><label>每日早报</label><label class="check"><input type="checkbox" id="dailyOn" ${state.settings.daily_report ? 'checked' : ''}>每天推送节点运行概况</label></div>
-          <div class="field"><label>推送时间</label><select id="dailyHour">${hourOptions}</select></div>
+          <button class="btn" id="saveThresholds">保存阈值</button>
         </div>
-        <div class="head-actions">
-          <button class="btn" id="saveNotify">保存通知设置</button>
-          <button class="btn ghost" id="testNotify">测试推送</button>
-          ${state.hasWebhook ? '<button class="btn sm ghost" id="clearWebhook">清除 Webhook</button>' : ''}
-        </div>
-      </div>
-      <div class="card settings-card" id="setAI">
-        ${settingHead('spark', 'AI 运维助手', 'OpenAI 兼容接口，Base URL 填到 /v1 为止；Key 只保存在本机配置中')}
-        <div class="form-grid">
-          <div class="field full"><label>Base URL</label><input type="text" id="aiBase" autocomplete="off" value="${esc(state.settings.ai_base || '')}" placeholder="https://api.example.com/v1"></div>
-          <div class="field">
-            <label>模型</label>
-            <div class="model-row">
-              <input type="text" id="aiModel" list="aiModelList" autocomplete="off" value="${esc(state.settings.ai_model || '')}" placeholder="gpt-4o-mini">
-              <button class="btn sm ghost" id="aiDetect" type="button" title="从 Base URL 拉取可用模型列表">自动检测</button>
+        <div class="card settings-card" id="setNotify">
+          ${settingHead('bell', '通知推送', '阈值告警只推一次，恢复时再通知；支持企业微信、钉钉、飞书、Bark、Server酱等十余种渠道')}
+          <div class="form-grid">
+            <div class="field full">
+              <label>Webhook 地址</label>
+              <input type="text" id="webhookUrl" autocomplete="off" placeholder="${state.hasWebhook ? '已配置，留空保持不变' : 'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=...'}">
+              <details class="hook-help">
+                <summary>各平台 Webhook 格式</summary>
+                <div class="hint">企业微信 / 钉钉 / 飞书 / Slack / Discord 粘贴机器人 Webhook；手机推送：Bark 填 https://api.day.app/设备Key，Server酱 填 https://sctapi.ftqq.com/SENDKEY.send，PushPlus 填 https://www.pushplus.plus/send?token=TOKEN，ntfy 填 https://ntfy.sh/主题，Gotify 填 https://你的域名/message?token=TOKEN，Telegram 填 https://api.telegram.org/botTOKEN/sendMessage?chat_id=ID</div>
+              </details>
             </div>
-            <datalist id="aiModelList"></datalist>
-            <div class="hint" id="aiDetectHint"></div>
+            <div class="field"><label>每日早报</label><label class="check"><input type="checkbox" id="dailyOn" ${state.settings.daily_report ? 'checked' : ''}>每天推送节点运行概况</label></div>
+            <div class="field"><label>推送时间</label><select id="dailyHour">${hourOptions}</select></div>
           </div>
-          <div class="field"><label>API Key</label><input type="password" id="aiKey" autocomplete="new-password" placeholder="${state.hasAIKey ? '已配置，留空保持不变' : 'sk-...'}"></div>
+          <div class="head-actions">
+            <button class="btn" id="saveNotify">保存通知设置</button>
+            <button class="btn ghost" id="testNotify">测试推送</button>
+            ${state.hasWebhook ? '<button class="btn sm ghost" id="clearWebhook">清除 Webhook</button>' : ''}
+          </div>
         </div>
-        <button class="btn" id="saveAI">保存 AI 设置</button>
       </div>
+      <div class="settings-col">
+        <div class="card settings-card" id="setAI">
+          ${settingHead('spark', 'AI 运维助手', 'OpenAI 兼容接口，Base URL 填到 /v1 为止；Key 只保存在本机配置中')}
+          <div class="form-grid">
+            <div class="field full"><label>Base URL</label><input type="text" id="aiBase" autocomplete="off" value="${esc(state.settings.ai_base || '')}" placeholder="https://api.example.com/v1"></div>
+            <div class="field">
+              <label>模型</label>
+              <div class="model-row">
+                <input type="text" id="aiModel" list="aiModelList" autocomplete="off" value="${esc(state.settings.ai_model || '')}" placeholder="gpt-4o-mini">
+                <button class="btn sm ghost" id="aiDetect" type="button" title="从 Base URL 拉取可用模型列表">自动检测</button>
+              </div>
+              <datalist id="aiModelList"></datalist>
+              <div class="hint" id="aiDetectHint"></div>
+            </div>
+            <div class="field"><label>API Key</label><input type="password" id="aiKey" autocomplete="new-password" placeholder="${state.hasAIKey ? '已配置，留空保持不变' : 'sk-...'}"></div>
+          </div>
+          <button class="btn" id="saveAI">保存 AI 设置</button>
+        </div>
+        <div class="card settings-card" id="setPwd">
+          ${settingHead('key', '修改密码', state.desktop ? '桌面版已自动登录；设置密码后也可在本机浏览器中登录' : '密码用于登录面板，不会修改服务器 SSH 密码')}
+          <div class="form-grid">
+            ${state.desktop ? '' : '<div class="field full"><label>当前密码</label><input type="password" id="pwdOld" autocomplete="current-password"></div>'}
+            <div class="field"><label>新密码</label><input type="password" id="pwdNew" autocomplete="new-password"></div>
+            <div class="field"><label>确认新密码</label><input type="password" id="pwdNew2" autocomplete="new-password"></div>
+          </div>
+          <button class="btn" id="savePassword">更新密码</button>
+        </div>
+      </div>
+    </div>
+    <div class="settings-grid">
       <div class="card settings-card full" id="setNodes">
         ${settingHead('server', '节点管理', '通过 SSH 纳管服务器，无需在目标机器安装 Agent')}
         <div class="node-list" id="nodeList"></div>

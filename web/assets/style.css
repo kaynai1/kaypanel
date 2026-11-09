@@ -671,9 +671,16 @@ button { cursor: pointer; }
 .form-actions { display: flex; gap: 9px; margin-top: 16px; flex-wrap: wrap; align-items: center; }
 .form-actions .spacer { flex: 1; }
 
+.settings-cols { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; align-items: stretch; }
+.settings-col { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.settings-col .settings-card:last-child { flex: 1; }
 .settings-grid { display: grid; grid-template-columns: repeat(12, 1fr); gap: 12px; align-items: start; }
 .settings-card { grid-column: span 6; scroll-margin-top: 72px; }
 .settings-card.full { grid-column: 1 / -1; }
+.hook-help { margin-top: 7px; }
+.hook-help summary { cursor: pointer; color: var(--accent); font-size: 12.5px; user-select: none; }
+.hook-help summary:hover { text-decoration: underline; }
+.hook-help[open] summary { margin-bottom: 5px; }
 .settings-card h2 { font-size: 15.5px; margin: 0 0 4px; font-weight: 600; }
 .settings-card .sub { color: var(--muted); font-size: 13px; line-height: 1.6; margin: 0 0 14px; }
 .settings-card .btn { margin-top: 12px; }
@@ -937,6 +944,7 @@ button { cursor: pointer; }
 }
 @media (max-width: 1080px) {
   .stat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .settings-cols { grid-template-columns: 1fr; }
   .settings-card { grid-column: 1 / -1; }
 }
 @media (max-width: 960px) {
