@@ -1,0 +1,7 @@
+data/
+dist/
+.tmp/
+*.exe
+*.log
+.DS_Store
+node_modules/
