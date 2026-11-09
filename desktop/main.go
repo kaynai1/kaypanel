@@ -24,20 +24,28 @@ import (
 var version = "dev"
 
 var (
-	user32dll            = windows.NewLazySystemDLL("user32.dll")
-	procGetWindowLongPtr = user32dll.NewProc("GetWindowLongPtrW")
-	procSetWindowLongPtr = user32dll.NewProc("SetWindowLongPtrW")
-	procSetWindowPos     = user32dll.NewProc("SetWindowPos")
-	procShowWindow       = user32dll.NewProc("ShowWindow")
-	procIsZoomed         = user32dll.NewProc("IsZoomed")
-	procReleaseCapture   = user32dll.NewProc("ReleaseCapture")
-	procGetCursorPos     = user32dll.NewProc("GetCursorPos")
-	procSendMessage      = user32dll.NewProc("SendMessageW")
-	procPostMessage      = user32dll.NewProc("PostMessageW")
+	user32dll                    = windows.NewLazySystemDLL("user32.dll")
+	procGetWindowLongPtr         = user32dll.NewProc("GetWindowLongPtrW")
+	procSetWindowLongPtr         = user32dll.NewProc("SetWindowLongPtrW")
+	procSetWindowPos             = user32dll.NewProc("SetWindowPos")
+	procShowWindow               = user32dll.NewProc("ShowWindow")
+	procIsZoomed                 = user32dll.NewProc("IsZoomed")
+	procReleaseCapture           = user32dll.NewProc("ReleaseCapture")
+	procGetCursorPos             = user32dll.NewProc("GetCursorPos")
+	procSendMessage              = user32dll.NewProc("SendMessageW")
+	procPostMessage              = user32dll.NewProc("PostMessageW")
+	procCallWindowProc           = user32dll.NewProc("CallWindowProcW")
+	procDefWindowProc            = user32dll.NewProc("DefWindowProcW")
+	procMonitorFromWindow        = user32dll.NewProc("MonitorFromWindow")
+	procGetMonitorInfo           = user32dll.NewProc("GetMonitorInfoW")
+	procGetDpiForWindow          = user32dll.NewProc("GetDpiForWindow")
+	procAdjustWindowRectExForDpi = user32dll.NewProc("AdjustWindowRectExForDpi")
 )
 
 const (
 	gwlStyle        = -16
+	gwlExStyle      = -20
+	gwlWndProc      = -4
 	wsCaption       = 0x00C00000
 	swpNoSize       = 0x0001
 	swpNoMove       = 0x0002
@@ -50,8 +58,33 @@ const (
 	wmClose         = 0x0010
 	wmSize          = 0x0005
 	wmNCLButtonDown = 0x00A1
+	wmGetMinMaxInfo = 0x0024
 	htCaption       = 2
+	monitorNearest  = 2
 )
+
+type point struct {
+	X, Y int32
+}
+
+type winRect struct {
+	Left, Top, Right, Bottom int32
+}
+
+type minMaxInfo struct {
+	PtReserved     point
+	PtMaxSize      point
+	PtMaxPosition  point
+	PtMinTrackSize point
+	PtMaxTrackSize point
+}
+
+type monitorInfo struct {
+	CbSize    uint32
+	RcMonitor winRect
+	RcWork    winRect
+	DwFlags   uint32
+}
 
 func init() {
 	user32 := windows.NewLazySystemDLL("user32.dll")
@@ -125,9 +158,14 @@ func main() {
 	}
 	defer w.Destroy()
 	makeFrameless(w)
+	fixMaximize(w)
 	bindWindow(w)
 	w.Navigate(authURL)
 	w.Run()
+}
+
+func ptrIndex(i int) uintptr {
+	return uintptr(i)
 }
 
 func makeFrameless(w webview2.WebView) {
@@ -135,13 +173,66 @@ func makeFrameless(w webview2.WebView) {
 	if hwnd == 0 {
 		return
 	}
-	idx := gwlStyle
-	style, _, _ := procGetWindowLongPtr.Call(hwnd, uintptr(idx))
+	style, _, _ := procGetWindowLongPtr.Call(hwnd, ptrIndex(gwlStyle))
 	style &^= wsCaption
-	procSetWindowLongPtr.Call(hwnd, uintptr(idx), style)
+	procSetWindowLongPtr.Call(hwnd, ptrIndex(gwlStyle), style)
 	procSetWindowPos.Call(hwnd, 0, 0, 0, 0, 0,
 		swpNoMove|swpNoSize|swpNoZOrder|swpNoActivate|swpFrameChanged)
 	procSendMessage.Call(hwnd, wmSize, 0, 0)
+}
+
+var prevWndProc uintptr
+
+// Maximizing a caption-less thick-frame window covers the taskbar, so clamp
+// the maximized geometry to the monitor work area.
+func fixMaximize(w webview2.WebView) {
+	hwnd := uintptr(w.Window())
+	if hwnd == 0 {
+		return
+	}
+	cb := syscall.NewCallback(func(h, msg, wp, lp uintptr) uintptr {
+		if msg == wmGetMinMaxInfo {
+			clampMaximize(h, lp)
+		}
+		if prevWndProc == 0 {
+			r, _, _ := procDefWindowProc.Call(h, msg, wp, lp)
+			return r
+		}
+		r, _, _ := procCallWindowProc.Call(prevWndProc, h, msg, wp, lp)
+		return r
+	})
+	prevWndProc, _, _ = procSetWindowLongPtr.Call(hwnd, ptrIndex(gwlWndProc), cb)
+}
+
+func clampMaximize(hwnd, lp uintptr) {
+	if lp == 0 {
+		return
+	}
+	mmi := (*minMaxInfo)(unsafe.Pointer(lp))
+	hmon, _, _ := procMonitorFromWindow.Call(hwnd, monitorNearest)
+	if hmon == 0 {
+		return
+	}
+	var mi monitorInfo
+	mi.CbSize = uint32(unsafe.Sizeof(mi))
+	if ok, _, _ := procGetMonitorInfo.Call(hmon, uintptr(unsafe.Pointer(&mi))); ok == 0 {
+		return
+	}
+	style, _, _ := procGetWindowLongPtr.Call(hwnd, ptrIndex(gwlStyle))
+	exStyle, _, _ := procGetWindowLongPtr.Call(hwnd, ptrIndex(gwlExStyle))
+	dpi, _, _ := procGetDpiForWindow.Call(hwnd)
+	if dpi == 0 {
+		dpi = 96
+	}
+	var fr winRect
+	if ok, _, _ := procAdjustWindowRectExForDpi.Call(
+		uintptr(unsafe.Pointer(&fr)), style, 0, exStyle, dpi); ok == 0 {
+		return
+	}
+	mmi.PtMaxPosition.X = mi.RcWork.Left - mi.RcMonitor.Left + fr.Left
+	mmi.PtMaxPosition.Y = mi.RcWork.Top - mi.RcMonitor.Top + fr.Top
+	mmi.PtMaxSize.X = (mi.RcWork.Right - mi.RcWork.Left) + fr.Right - fr.Left
+	mmi.PtMaxSize.Y = (mi.RcWork.Bottom - mi.RcWork.Top) + fr.Bottom - fr.Top
 }
 
 func bindWindow(w webview2.WebView) {
