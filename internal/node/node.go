@@ -148,6 +148,9 @@ func (m *Manager) Update(id string, patch config.Node) error {
 	if patch.HostKey == "" && patch.Addr == old.Addr {
 		patch.HostKey = old.HostKey
 	}
+	if patch.SkipHostKey {
+		patch.HostKey = ""
+	}
 	patch.ID = id
 	patch.CreatedAt = old.CreatedAt
 	patch, err := normalize(patch)
@@ -356,7 +359,8 @@ func (n *Node) setConfig(c config.Node) {
 	n.mu.Lock()
 	changed := n.cfg.Addr != c.Addr || n.cfg.User != c.User || n.cfg.AuthType != c.AuthType ||
 		n.cfg.PrivateKey != c.PrivateKey || n.cfg.Password != c.Password ||
-		n.cfg.HostKey != c.HostKey || n.cfg.Sudo != c.Sudo || n.cfg.SudoPassword != c.SudoPassword
+		n.cfg.HostKey != c.HostKey || n.cfg.SkipHostKey != c.SkipHostKey ||
+		n.cfg.Sudo != c.Sudo || n.cfg.SudoPassword != c.SudoPassword
 	n.cfg = c
 	client := n.client
 	if changed {

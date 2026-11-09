@@ -105,9 +105,9 @@ func (p *Processor) Next(out string, now time.Time) Snapshot {
 
 	mem := parseKV(sec["MEM"])
 	snap.MemTotal = mem["MemTotal"] * 1024
-	avail := mem["MemAvailable"]
+	avail := mem["MemAvailable"] * 1024
 	if avail == 0 {
-		avail = mem["MemFree"] + mem["Buffers"] + mem["Cached"]
+		avail = (mem["MemFree"] + mem["Buffers"] + mem["Cached"]) * 1024
 	}
 	if avail < snap.MemTotal {
 		snap.MemUsed = snap.MemTotal - avail
