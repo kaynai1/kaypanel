@@ -23,6 +23,36 @@ import (
 
 var version = "dev"
 
+var (
+	user32dll            = windows.NewLazySystemDLL("user32.dll")
+	procGetWindowLongPtr = user32dll.NewProc("GetWindowLongPtrW")
+	procSetWindowLongPtr = user32dll.NewProc("SetWindowLongPtrW")
+	procSetWindowPos     = user32dll.NewProc("SetWindowPos")
+	procShowWindow       = user32dll.NewProc("ShowWindow")
+	procIsZoomed         = user32dll.NewProc("IsZoomed")
+	procReleaseCapture   = user32dll.NewProc("ReleaseCapture")
+	procGetCursorPos     = user32dll.NewProc("GetCursorPos")
+	procSendMessage      = user32dll.NewProc("SendMessageW")
+	procPostMessage      = user32dll.NewProc("PostMessageW")
+)
+
+const (
+	gwlStyle        = -16
+	wsCaption       = 0x00C00000
+	swpNoSize       = 0x0001
+	swpNoMove       = 0x0002
+	swpNoZOrder     = 0x0004
+	swpNoActivate   = 0x0010
+	swpFrameChanged = 0x0020
+	swMinimize      = 6
+	swMaximize      = 3
+	swRestore       = 9
+	wmClose         = 0x0010
+	wmSize          = 0x0005
+	wmNCLButtonDown = 0x00A1
+	htCaption       = 2
+)
+
 func init() {
 	user32 := windows.NewLazySystemDLL("user32.dll")
 	if err := user32.NewProc("SetProcessDpiAwarenessContext").Find(); err == nil {
@@ -94,8 +124,52 @@ func main() {
 		return
 	}
 	defer w.Destroy()
+	makeFrameless(w)
+	bindWindow(w)
 	w.Navigate(authURL)
 	w.Run()
+}
+
+func makeFrameless(w webview2.WebView) {
+	hwnd := uintptr(w.Window())
+	if hwnd == 0 {
+		return
+	}
+	idx := gwlStyle
+	style, _, _ := procGetWindowLongPtr.Call(hwnd, uintptr(idx))
+	style &^= wsCaption
+	procSetWindowLongPtr.Call(hwnd, uintptr(idx), style)
+	procSetWindowPos.Call(hwnd, 0, 0, 0, 0, 0,
+		swpNoMove|swpNoSize|swpNoZOrder|swpNoActivate|swpFrameChanged)
+	procSendMessage.Call(hwnd, wmSize, 0, 0)
+}
+
+func bindWindow(w webview2.WebView) {
+	hwnd := uintptr(w.Window())
+	_ = w.Bind("kaypanelWindow", func(action string) string {
+		switch action {
+		case "min":
+			procShowWindow.Call(hwnd, swMinimize)
+		case "max":
+			if z, _, _ := procIsZoomed.Call(hwnd); z != 0 {
+				procShowWindow.Call(hwnd, swRestore)
+				return "restore"
+			}
+			procShowWindow.Call(hwnd, swMaximize)
+			return "max"
+		case "close":
+			procPostMessage.Call(hwnd, wmClose, 0, 0)
+		}
+		return ""
+	})
+	_ = w.Bind("kaypanelDrag", func() string {
+		var pt struct{ X, Y int32 }
+		procGetCursorPos.Call(uintptr(unsafe.Pointer(&pt)))
+		lp := uintptr(uint16(pt.X)) | uintptr(uint16(pt.Y))<<16
+		procReleaseCapture.Call()
+		procSendMessage.Call(hwnd, wmNCLButtonDown, htCaption, lp)
+		return ""
+	})
 }
 
 func singleInstance() (func(), bool) {

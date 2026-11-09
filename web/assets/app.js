@@ -71,11 +71,28 @@ const ICON_PATHS = {
   wall: '<rect x="2.5" y="4" width="19" height="12.5" rx="2"/><path d="M8 20h8"/><path d="M12 16.5V20"/>',
   expand: '<path d="M8 3H3v5"/><path d="M16 3h5v5"/><path d="M16 21h5v-5"/><path d="M8 21H3v-5"/>',
   spark: '<path d="M12 3l1.8 4.9L19 10l-5.2 2.1L12 17l-1.8-4.9L5 10l5.2-2.1L12 3Z"/><path d="M18.5 15l.8 2.2L21.5 18l-2.2.8-.8 2.2-.8-2.2L15.5 18l2.2-.8.8-2.2Z"/>',
+  winMin: '<path d="M5 12h14"/>',
+  winMax: '<rect x="6" y="6" width="12" height="12" rx="1"/>',
+  winRestore: '<rect x="8.5" y="8.5" width="10" height="10" rx="1"/><path d="M8.5 16h-2a1 1 0 0 1-1-1V5.5a1 1 0 0 1 1-1H16a1 1 0 0 1 1 1v2"/>',
+  winClose: '<path d="m6.5 6.5 11 11M17.5 6.5l-11 11"/>',
 };
 
 function ico(name, cls = '') {
   const paths = ICON_PATHS[name] || '';
   return `<svg${cls ? ` class="${cls}"` : ''} viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths}</svg>`;
+}
+
+function hasWindowHost() {
+  return typeof window.kaypanelWindow === 'function';
+}
+
+function winControlsHTML() {
+  if (!hasWindowHost()) return '';
+  return `<div class="win-controls">
+    <button class="win-btn" data-win="min" title="最小化">${ico('winMin')}</button>
+    <button class="win-btn" data-win="max" title="最大化">${ico('winMax')}</button>
+    <button class="win-btn win-close" data-win="close" title="关闭">${ico('winClose')}</button>
+  </div>`;
 }
 
 const AVATAR_COLORS = ['#2563eb', '#7c3aed', '#0891b2', '#059669', '#d97706', '#dc2626', '#db2777', '#4f46e5'];
@@ -208,6 +225,7 @@ function showLogin() {
 function renderLogin() {
   $('#app').innerHTML = `
     <div class="login-wrap">
+      ${hasWindowHost() ? `<div class="login-win">${winControlsHTML()}</div>` : ''}
       <div class="login-card">
         <img class="login-logo" src="/assets/logo.svg" alt="">
         <h1 class="login-title">KayPanel</h1>
@@ -271,13 +289,14 @@ function renderShell() {
       </div>
     </aside>
     <div class="main-col">
-      <header class="topbar">
+      <header class="topbar${hasWindowHost() ? ' has-win' : ''}">
         <div class="node-switch" id="nodeSwitchWrap"></div>
         <div class="live-pill"><span class="live-dot"></span><span id="liveText">实时监控</span></div>
         <div class="top-right">
           <button class="icon-btn" id="wallBtn" title="监控大屏">${ico('wall')}</button>
           <button class="icon-btn" id="topRefresh" title="刷新当前页">${ico('refresh')}</button>
           ${state.desktop ? '' : `<button class="icon-btn" id="logoutBtn" title="退出登录">${ico('logout')}</button>`}
+          ${winControlsHTML()}
         </div>
       </header>
       <div class="content" id="content">
@@ -314,6 +333,50 @@ function renderShell() {
   }
   updateTabs();
   updateNodePills();
+}
+
+const DRAG_SKIP = 'button, input, textarea, select, a, .node-switch, .live-pill, .win-controls, .login-card';
+
+function setMaxIcon(state) {
+  const btn = document.querySelector('[data-win=max]');
+  if (!btn) return;
+  btn.innerHTML = ico(state === 'max' ? 'winRestore' : 'winMax');
+  btn.title = state === 'max' ? '向下还原' : '最大化';
+}
+
+function toggleMax() {
+  window.kaypanelWindow('max').then(setMaxIcon);
+}
+
+function setupWindowChrome() {
+  if (!hasWindowHost()) return;
+  document.addEventListener('click', e => {
+    const btn = e.target.closest && e.target.closest('[data-win]');
+    if (!btn) return;
+    const action = btn.dataset.win;
+    if (action === 'max') {
+      toggleMax();
+    } else {
+      window.kaypanelWindow(action);
+    }
+  });
+  let lastDown = 0, lastX = 0, lastY = 0;
+  document.addEventListener('mousedown', e => {
+    if (e.button !== 0 || !e.target.closest) return;
+    const area = e.target.closest('.topbar, .side-brand, .login-wrap');
+    if (!area || e.target.closest(DRAG_SKIP)) return;
+    e.preventDefault();
+    const now = performance.now();
+    if (now - lastDown < 400 && Math.abs(e.clientX - lastX) < 6 && Math.abs(e.clientY - lastY) < 6) {
+      lastDown = 0;
+      toggleMax();
+      return;
+    }
+    lastDown = now;
+    lastX = e.clientX;
+    lastY = e.clientY;
+    if (typeof window.kaypanelDrag === 'function') window.kaypanelDrag();
+  });
 }
 
 function closeNodeMenu() {
@@ -2781,6 +2844,7 @@ function promptDialog(title, desc, value) {
 /* ---------- boot ---------- */
 
 async function boot() {
+  setupWindowChrome();
   try {
     const res = await fetch('/api/me', { credentials: 'same-origin' });
     if (!res.ok) throw new Error('unauth');
