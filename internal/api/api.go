@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -17,6 +18,7 @@ import (
 
 	"kaypanel/internal/audit"
 	"kaypanel/internal/config"
+	"kaypanel/internal/instabox"
 	"kaypanel/internal/metrics"
 	"kaypanel/internal/node"
 )
@@ -75,6 +77,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("PUT /api/nodes/{id}", s.auth(s.handleNodeUpdate))
 	mux.Handle("DELETE /api/nodes/{id}", s.auth(s.handleNodeDelete))
 	mux.Handle("POST /api/nodes/{id}/test", s.auth(s.handleNodeTest))
+	mux.Handle("POST /api/instabox/machines", s.auth(s.handleInstaboxMachines))
 	mux.Handle("GET /api/nodes/{id}/processes", s.auth(s.handleProcesses))
 
 	mux.Handle("GET /api/nodes/{id}/containers", s.auth(s.handleContainers))
@@ -413,6 +416,9 @@ type nodeReq struct {
 	Sudo         bool   `json:"sudo"`
 	SudoPassword string `json:"sudo_password"`
 	SkipHostKey  bool   `json:"skip_host_key"`
+	AutoWake     bool   `json:"auto_wake"`
+	IBAPIKey     string `json:"instabox_api_key"`
+	IBMachineID  string `json:"instabox_machine_id"`
 	FileRoot     string `json:"file_root"`
 	StacksDir    string `json:"stacks_dir"`
 	KeyPath      string `json:"key_path"`
@@ -441,6 +447,9 @@ func (n nodeReq) config() config.Node {
 		Sudo:         n.Sudo,
 		SudoPassword: n.SudoPassword,
 		SkipHostKey:  n.SkipHostKey,
+		AutoWake:     n.AutoWake,
+		IBAPIKey:     n.IBAPIKey,
+		IBMachineID:  n.IBMachineID,
 		FileRoot:     n.FileRoot,
 		StacksDir:    n.StacksDir,
 	}
@@ -507,6 +516,35 @@ func (s *Server) handleNodeTest(w http.ResponseWriter, r *http.Request) {
 	res := s.mgr.Test(id)
 	s.audit.Add("admin", id, "测试节点", res.Hostname)
 	writeJSON(w, http.StatusOK, res)
+}
+
+func (s *Server) handleInstaboxMachines(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		APIKey string `json:"api_key"`
+		NodeID string `json:"node_id"`
+	}
+	if err := readJSON(r, &req); err != nil {
+		writeErr(w, http.StatusBadRequest, "请求格式错误")
+		return
+	}
+	key := strings.TrimSpace(req.APIKey)
+	if key == "" && req.NodeID != "" {
+		if n, ok := s.mgr.Get(req.NodeID); ok {
+			key = n.Config().IBAPIKey
+		}
+	}
+	if key == "" {
+		writeErr(w, http.StatusBadRequest, "请先填写 Instabox API Key")
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 25*time.Second)
+	defer cancel()
+	list, err := instabox.Machines(ctx, key)
+	if err != nil {
+		writeErr(w, http.StatusBadGateway, "读取机器列表失败: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"machines": list})
 }
 
 func (s *Server) handleProcesses(w http.ResponseWriter, r *http.Request) {

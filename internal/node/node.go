@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"kaypanel/internal/config"
+	"kaypanel/internal/instabox"
 	"kaypanel/internal/metrics"
 	"kaypanel/internal/sshx"
 )
@@ -22,11 +23,13 @@ var (
 
 type View struct {
 	config.Node
-	HasPassword bool              `json:"has_password"`
-	HasKey      bool              `json:"has_key"`
-	Online      bool              `json:"online"`
-	Error       string            `json:"error"`
-	Latest      metrics.Snapshot  `json:"latest"`
+	HasPassword bool               `json:"has_password"`
+	HasKey      bool               `json:"has_key"`
+	HasIBKey    bool               `json:"has_instabox_key"`
+	Online      bool               `json:"online"`
+	Waking      bool               `json:"waking"`
+	Error       string             `json:"error"`
+	Latest      metrics.Snapshot   `json:"latest"`
 	History     []metrics.Snapshot `json:"history"`
 }
 
@@ -49,11 +52,15 @@ type Node struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 
-	online  bool
-	errMsg  string
-	latest  metrics.Snapshot
-	hist    []metrics.Snapshot
-	proc    metrics.Processor
+	online bool
+	waking bool
+	errMsg string
+	latest metrics.Snapshot
+	hist   []metrics.Snapshot
+	proc   metrics.Processor
+
+	lastWake  time.Time
+	lastLease time.Time
 }
 
 type Manager struct {
@@ -141,6 +148,9 @@ func (m *Manager) Update(id string, patch config.Node) error {
 	}
 	if patch.Password == "" {
 		patch.Password = old.Password
+	}
+	if patch.IBAPIKey == "" {
+		patch.IBAPIKey = old.IBAPIKey
 	}
 	if patch.SudoPassword == "" {
 		patch.SudoPassword = old.SudoPassword
@@ -291,6 +301,16 @@ func normalize(c config.Node) (config.Node, error) {
 	}
 	if c.AuthType == "password" && c.Password == "" {
 		return c, fmt.Errorf("请填写 SSH 密码")
+	}
+	c.IBAPIKey = strings.TrimSpace(c.IBAPIKey)
+	c.IBMachineID = strings.TrimSpace(c.IBMachineID)
+	if c.AutoWake {
+		if c.IBMachineID == "" {
+			return c, fmt.Errorf("自动唤醒需要填写 Instabox 机器 ID")
+		}
+		if c.IBAPIKey == "" {
+			return c, fmt.Errorf("自动唤醒需要填写 Instabox API Key")
+		}
 	}
 	c.FileRoot = strings.TrimSpace(c.FileRoot)
 	if c.FileRoot == "" {
@@ -457,20 +477,68 @@ func (n *Node) run() {
 		}
 		err := n.sample()
 		if err != nil {
-			n.setOffline(err)
-			select {
-			case <-n.ctx.Done():
-				return
-			case <-time.After(12 * time.Second):
+			if attempted, werr := n.tryWake(); attempted {
+				if werr != nil {
+					err = fmt.Errorf("%s；自动唤醒失败: %v", err, werr)
+				} else if serr := n.sample(); serr == nil {
+					err = nil
+				} else {
+					err = serr
+				}
 			}
-			continue
+		}
+		wait := 3 * time.Second
+		if err != nil {
+			n.setOffline(err)
+			wait = 12 * time.Second
+		} else {
+			n.maybeLease()
 		}
 		select {
 		case <-n.ctx.Done():
 			return
-		case <-time.After(3 * time.Second):
+		case <-time.After(wait):
 		}
 	}
+}
+
+func (n *Node) tryWake() (bool, error) {
+	cfg := n.Config()
+	if !cfg.AutoWake || cfg.IBAPIKey == "" || cfg.IBMachineID == "" {
+		return false, nil
+	}
+	if time.Since(n.lastWake) < 2*time.Minute {
+		return false, nil
+	}
+	n.lastWake = time.Now()
+	n.setWaking(true)
+	defer n.setWaking(false)
+	ctx, cancel := context.WithTimeout(n.ctx, 60*time.Second)
+	defer cancel()
+	if err := instabox.Wake(ctx, cfg.IBAPIKey, cfg.IBMachineID); err != nil {
+		return true, err
+	}
+	return true, nil
+}
+
+func (n *Node) maybeLease() {
+	cfg := n.Config()
+	if !cfg.AutoWake || cfg.IBAPIKey == "" || cfg.IBMachineID == "" {
+		return
+	}
+	if !n.lastLease.IsZero() && time.Since(n.lastLease) < 5*time.Minute {
+		return
+	}
+	n.lastLease = time.Now()
+	ctx, cancel := context.WithTimeout(n.ctx, 15*time.Second)
+	defer cancel()
+	_ = instabox.Lease(ctx, cfg.IBAPIKey, cfg.IBMachineID, "kaypanel-"+cfg.ID, 900)
+}
+
+func (n *Node) setWaking(v bool) {
+	n.mu.Lock()
+	n.waking = v
+	n.mu.Unlock()
 }
 
 func (n *Node) sample() error {
@@ -518,7 +586,9 @@ func (n *Node) View() View {
 		Node:        n.cfg,
 		HasPassword: n.cfg.Password != "",
 		HasKey:      strings.TrimSpace(n.cfg.PrivateKey) != "",
+		HasIBKey:    n.cfg.IBAPIKey != "",
 		Online:      n.online,
+		Waking:      n.waking,
 		Error:       n.errMsg,
 		Latest:      n.latest,
 		History:     hist,

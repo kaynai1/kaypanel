@@ -322,13 +322,21 @@ function updateTabs() {
   $$('.nav-item').forEach(t => t.classList.toggle('active', t.dataset.page === state.page));
 }
 
+function nodeDotClass(n) {
+  return n.online ? 'online' : n.waking ? 'waking' : 'offline';
+}
+
+function nodeStateText(n) {
+  return n.online ? '在线' : n.waking ? '唤醒中' : '离线';
+}
+
 function nodeSwitchHTML() {
   const n = currentNode();
   const chip = n
     ? `<button type="button" class="switch-chip" id="nodeSwitch">
         <span class="avatar" style="background:${avatarColor(n.id)}">${esc(initialOf(n.name))}</span>
         <span class="switch-main"><b>${esc(n.name)}</b><span>${esc(n.user)}@${esc(n.addr)}</span></span>
-        <span class="dot ${n.online ? 'online' : 'offline'}"></span>
+        <span class="dot ${nodeDotClass(n)}"></span>
         ${ico('chevron', 'chev')}
       </button>`
     : `<button type="button" class="switch-chip" id="nodeSwitch"><span class="switch-main"><b>未选择节点</b><span>添加节点后开始管理</span></span>${ico('chevron', 'chev')}</button>`;
@@ -336,7 +344,7 @@ function nodeSwitchHTML() {
     <button type="button" class="acct-item ${x.id === state.selected ? 'active' : ''}" data-node="${esc(x.id)}">
       <span class="avatar" style="background:${avatarColor(x.id)}">${esc(initialOf(x.name))}</span>
       <span class="acct-main"><b>${esc(x.name)}${x.id === state.selected ? '<span class="tag-soft">当前</span>' : ''}</b><span>${esc(x.user)}@${esc(x.addr)}</span></span>
-      <span class="acct-state"><span class="dot ${x.online ? 'online' : 'offline'}"></span>${x.online ? '在线' : '离线'}</span>
+      <span class="acct-state"><span class="dot ${nodeDotClass(x)}"></span>${nodeStateText(x)}</span>
     </button>`).join('') || `<div class="rail-empty">尚未添加节点</div>`;
   return `${chip}<div class="node-menu" id="nodeMenu"><div class="menu-head">切换节点</div>${rows}<button type="button" class="rail-add" data-addnode>+ 添加节点</button></div>`;
 }
@@ -683,7 +691,7 @@ function nodesCard() {
         <div class="nl-metric">${n.online ? (Number(m.cpu) || 0).toFixed(1) + '%' : '—'}<span>CPU</span></div>
         <div class="nl-metric">${m.mem_total ? memP.toFixed(0) + '%' : '—'}<span>内存</span></div>
         <div class="nl-metric">${m.disk_total ? diskP.toFixed(0) + '%' : '—'}<span>磁盘</span></div>
-        <div class="nl-state"><span class="dot ${n.online ? 'online' : 'offline'}"></span>${n.online ? '在线' : '离线'}</div>
+        <div class="nl-state"><span class="dot ${nodeDotClass(n)}"></span>${nodeStateText(n)}</div>
       </div>`;
     }).join('')}
   </div>`;
@@ -704,7 +712,7 @@ function detailCards(n) {
           <button class="btn sm ghost" id="goContainers">容器</button>
         </div>
       </div>
-      ${!n.online && n.error ? `<div class="banner error">连接失败：${esc(n.error)}</div>` : ''}
+      ${!n.online && (n.waking || n.error) ? `<div class="banner error">${n.waking ? '正在自动唤醒 Instabox 机器，请稍候…' : '连接失败：' + esc(n.error)}</div>` : ''}
       <div class="info-list">
         <div class="info-row"><span>主机名</span><span>${esc(m.hostname || '-')}</span></div>
         <div class="info-row"><span>系统</span><span class="os-pill" title="${esc(m.os || '')}">${esc(m.os || '-')}</span></div>
@@ -2056,6 +2064,24 @@ function renderNodeForm(sub) {
           <label class="check-row"><input type="checkbox" id="nodeSkipHostKey" ${n && n.skip_host_key ? 'checked' : ''}> 跳过主机指纹校验</label>
           <div class="hint">仅用于 Instabox 这类每次连接指纹都会变化的主机；开启后不再校验主机身份。</div>
         </div>
+        <div class="field full">
+          <label class="check-row"><input type="checkbox" id="nodeAutoWake" ${n && n.auto_wake ? 'checked' : ''}> Instabox 自动唤醒</label>
+          <div class="hint">面板运行期间定期续租防止空闲休眠；机器已休眠时自动调用 Instabox 官方接口唤醒，约 1 分钟内重新上线。</div>
+        </div>
+        <div class="field full hidden" id="ibKeyField">
+          <label>Instabox API Key</label>
+          <input type="password" id="nodeIBKey" autocomplete="new-password" placeholder="${editing && n.has_instabox_key ? '已保存，留空保持不变' : 'ibk_…（在 dashboard.instabox.sh → API Keys 创建）'}">
+          <div class="hint">API Key 需包含读写权限，创建地址 https://dashboard.instabox.sh/dashboard/api-keys；Key 只保存在面板数据目录。</div>
+        </div>
+        <div class="field full hidden" id="ibMachineField">
+          <label>Instabox 机器 ID</label>
+          <div class="inline-row">
+            <input type="text" id="nodeIBMachine" value="${esc(n ? n.instabox_machine_id : '')}" placeholder="m_xxxxx">
+            <button class="btn sm" id="ibMachinesBtn" type="button">读取机器列表</button>
+          </div>
+          <select id="ibMachineSelect" class="hidden"></select>
+          <div class="hint">点「读取机器列表」会用上面的 Key 查询账号下的机器，选中后自动填入 ID。</div>
+        </div>
         <div class="field"><label>文件根目录</label><input type="text" id="nodeFileRoot" value="${esc(n ? n.file_root : '/')}" placeholder="/ 或 /vol1"></div>
         <div class="field"><label>Compose 应用目录</label><input type="text" id="nodeStacksDir" value="${esc(n ? n.stacks_dir : '')}" placeholder="留空使用 ~/kaypanel/stacks"></div>
         <div class="field full">
@@ -2092,6 +2118,48 @@ function renderNodeForm(sub) {
   const syncSudo = () => $('#sudoField').classList.toggle('hidden', !$('#nodeSudo').checked);
   $('#nodeSudo').addEventListener('change', syncSudo);
   syncSudo();
+
+  const syncWake = () => {
+    const on = $('#nodeAutoWake').checked;
+    $('#ibKeyField').classList.toggle('hidden', !on);
+    $('#ibMachineField').classList.toggle('hidden', !on);
+  };
+  $('#nodeAutoWake').addEventListener('change', syncWake);
+  syncWake();
+
+  $('#ibMachinesBtn').addEventListener('click', async () => {
+    const btn = $('#ibMachinesBtn');
+    const key = $('#nodeIBKey').value.trim();
+    if (!key && !(editing && n.has_instabox_key)) {
+      toast('请先填写 Instabox API Key', 'error');
+      return;
+    }
+    btn.disabled = true;
+    const label = btn.textContent;
+    btn.textContent = '读取中…';
+    try {
+      const d = await api('/api/instabox/machines', {
+        method: 'POST',
+        body: JSON.stringify({ api_key: key, node_id: editing ? n.id : '' }),
+      });
+      const list = d.machines || [];
+      if (!list.length) {
+        toast('该账号下没有机器', 'error');
+        return;
+      }
+      const sel = $('#ibMachineSelect');
+      sel.innerHTML = list.map(m => `<option value="${esc(m.id)}">${esc(m.name || m.id)} · ${esc(m.state || '未知状态')} · ${esc(m.id)}</option>`).join('');
+      sel.classList.remove('hidden');
+      sel.onchange = () => { $('#nodeIBMachine').value = sel.value; };
+      if (list.length === 1) $('#nodeIBMachine').value = list[0].id;
+      toast(`已读取 ${list.length} 台机器`, 'success');
+    } catch (e) {
+      toast(e.message || '读取机器列表失败', 'error', 6500);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = label;
+    }
+  });
 
   let pickedKeyPath = '';
   const setPickedKey = path => {
@@ -2145,6 +2213,9 @@ function renderNodeForm(sub) {
     sudo: $('#nodeSudo').checked,
     sudo_password: $('#nodeSudoPwd').value,
     skip_host_key: $('#nodeSkipHostKey').checked,
+    auto_wake: $('#nodeAutoWake').checked,
+    instabox_api_key: $('#nodeIBKey').value.trim(),
+    instabox_machine_id: $('#nodeIBMachine').value.trim(),
     file_root: $('#nodeFileRoot').value.trim() || '/',
     stacks_dir: $('#nodeStacksDir').value.trim(),
   });
@@ -2156,6 +2227,10 @@ function renderNodeForm(sub) {
     if (!payload.user) { toast('请填写 SSH 用户名', 'error'); return; }
     if (!editing && payload.auth_type === 'key' && !payload.private_key.trim() && !payload.key_path) { toast('请粘贴 SSH 私钥或选择本机私钥', 'error'); return; }
     if (!editing && payload.auth_type === 'password' && !payload.password) { toast('请填写 SSH 密码', 'error'); return; }
+    if (payload.auto_wake) {
+      if (!payload.instabox_machine_id) { toast('请填写 Instabox 机器 ID', 'error'); return; }
+      if (!payload.instabox_api_key && !(editing && n.has_instabox_key)) { toast('请填写 Instabox API Key', 'error'); return; }
+    }
     $('#nodeSave').disabled = true;
     $('#nodeSaveTest').disabled = true;
     let nodeId = sub.id;
