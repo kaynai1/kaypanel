@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"kaypanel/internal/config"
 	"kaypanel/internal/metrics"
 	"kaypanel/internal/node"
 )
@@ -65,7 +66,7 @@ func TestPersonalityOffline(t *testing.T) {
 }
 
 func TestPersonalitySFTPOnly(t *testing.T) {
-	p := personalityOf(node.View{Online: true, SFTPOnly: true}, nil, nil)
+	p := personalityOf(node.View{Node: config.Node{SFTPOnly: true}, Online: true}, nil, nil)
 	if p.Title != "佛系主机" {
 		t.Fatalf("unexpected sftp title: %+v", p)
 	}
