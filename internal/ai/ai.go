@@ -29,14 +29,21 @@ func endpoint(base string) string {
 }
 
 func Chat(ctx context.Context, base, key, model string, messages []Message) (string, error) {
+	return ChatTokens(ctx, base, key, model, messages, 1500)
+}
+
+func ChatTokens(ctx context.Context, base, key, model string, messages []Message, maxTokens int) (string, error) {
 	if strings.TrimSpace(base) == "" || strings.TrimSpace(key) == "" || strings.TrimSpace(model) == "" {
 		return "", fmt.Errorf("AI 助手尚未配置，请先在设置中填写 Base URL、模型和 API Key")
+	}
+	if maxTokens <= 0 {
+		maxTokens = 1500
 	}
 	body, err := json.Marshal(map[string]any{
 		"model":       model,
 		"messages":    messages,
 		"temperature": 0.3,
-		"max_tokens":  1500,
+		"max_tokens":  maxTokens,
 	})
 	if err != nil {
 		return "", err

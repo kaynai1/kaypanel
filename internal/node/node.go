@@ -44,6 +44,14 @@ type TestResult struct {
 	Error       string `json:"error,omitempty"`
 }
 
+type Event struct {
+	Time     int64            `json:"time"`
+	Level    string           `json:"level"`
+	Title    string           `json:"title"`
+	Detail   string           `json:"detail,omitempty"`
+	Snapshot metrics.Snapshot `json:"snapshot"`
+}
+
 type Node struct {
 	mu     sync.RWMutex
 	cfg    config.Node
@@ -57,10 +65,14 @@ type Node struct {
 	errMsg string
 	latest metrics.Snapshot
 	hist   []metrics.Snapshot
+	trend  []metrics.Snapshot
+	events []Event
 	proc   metrics.Processor
 
-	lastWake  time.Time
-	lastLease time.Time
+	lastTrend  time.Time
+	lastEvent  map[string]time.Time
+	lastWake   time.Time
+	lastLease  time.Time
 }
 
 type Manager struct {
@@ -80,9 +92,9 @@ func NewManager(store *config.Store, dataDir string) *Manager {
 }
 
 func (m *Manager) Start() {
-	hist := m.loadHistory()
+	hist, trends, events := m.loadHistory()
 	for _, cfg := range m.store.Nodes() {
-		m.startNode(cfg, hist[cfg.ID])
+		m.startNode(cfg, hist[cfg.ID], trends[cfg.ID], events[cfg.ID])
 	}
 	m.histCtx, m.histCancel = context.WithCancel(context.Background())
 	go m.historyLoop(m.histCtx)
@@ -101,9 +113,21 @@ func (m *Manager) Stop() {
 	}
 }
 
-func (m *Manager) startNode(cfg config.Node, hist []metrics.Snapshot) {
+func (m *Manager) startNode(cfg config.Node, hist, trend []metrics.Snapshot, events []Event) {
 	ctx, cancel := context.WithCancel(context.Background())
-	n := &Node{cfg: cfg, ctx: ctx, cancel: cancel, store: m.store, hist: capHistory(hist)}
+	n := &Node{
+		cfg:       cfg,
+		ctx:       ctx,
+		cancel:    cancel,
+		store:     m.store,
+		hist:      capHistory(hist),
+		trend:     capTrend(trend),
+		events:    capEvents(events),
+		lastEvent: map[string]time.Time{},
+	}
+	if len(n.trend) > 0 {
+		n.lastTrend = time.Unix(n.trend[len(n.trend)-1].Time, 0)
+	}
 	m.mu.Lock()
 	m.nodes[cfg.ID] = n
 	m.order = append(m.order, cfg.ID)
@@ -138,7 +162,7 @@ func (m *Manager) Add(c config.Node) (config.Node, error) {
 	if err != nil {
 		return c, err
 	}
-	m.startNode(c, nil)
+	m.startNode(c, nil, nil, nil)
 	if err := m.persist(); err != nil {
 		return c, err
 	}
@@ -574,8 +598,16 @@ func (n *Node) sftpProbe() error {
 
 func (n *Node) markOnline() {
 	n.mu.Lock()
+	wasOnline := n.online
 	n.online = true
 	n.errMsg = ""
+	if !wasOnline {
+		title := "节点上线"
+		if len(n.events) > 0 {
+			title = "节点恢复在线"
+		}
+		n.eventLocked("info", title, "", n.latest, 0)
+	}
 	n.mu.Unlock()
 }
 
@@ -634,7 +666,10 @@ func (n *Node) sample() error {
 	if snap.Hostname == "" && snap.MemTotal == 0 {
 		return fmt.Errorf("无法读取 /proc 指标")
 	}
+	set := n.store.Settings()
 	n.mu.Lock()
+	prev := n.latest
+	wasOnline := n.online
 	n.latest = snap
 	n.online = true
 	n.errMsg = ""
@@ -642,17 +677,130 @@ func (n *Node) sample() error {
 	if len(n.hist) > 120 {
 		n.hist = append([]metrics.Snapshot(nil), n.hist[len(n.hist)-120:]...)
 	}
+	n.detectEventsLocked(prev, wasOnline, snap, set)
+	n.appendTrendLocked(snap)
 	n.mu.Unlock()
 	return nil
 }
 
 func (n *Node) setOffline(err error) {
 	n.mu.Lock()
+	wasOnline := n.online
 	n.online = false
+	msg := ""
 	if err != nil {
 		n.errMsg = err.Error()
+		msg = n.errMsg
+	}
+	if wasOnline {
+		n.eventLocked("error", "节点离线", msg, n.latest, 0)
 	}
 	n.mu.Unlock()
+}
+
+func alertThreshold(v int) int {
+	if v <= 0 || v > 100 {
+		return 90
+	}
+	return v
+}
+
+func nodePct(used, total uint64) float64 {
+	if total == 0 {
+		return 0
+	}
+	return float64(used) / float64(total) * 100
+}
+
+func (n *Node) detectEventsLocked(prev metrics.Snapshot, wasOnline bool, snap metrics.Snapshot, set config.Settings) {
+	if !wasOnline {
+		title := "节点恢复在线"
+		if prev.Time == 0 && len(n.events) == 0 {
+			title = "节点上线"
+		}
+		n.eventLocked("info", title, "指标采集已恢复", snap, 0)
+		return
+	}
+	cpuAlert := alertThreshold(set.CPUAlert)
+	memAlert := alertThreshold(set.MemAlert)
+	diskAlert := alertThreshold(set.DiskAlert)
+	prevMem := nodePct(prev.MemUsed, prev.MemTotal)
+	mem := nodePct(snap.MemUsed, snap.MemTotal)
+	prevDisk := nodePct(prev.DiskUsed, prev.DiskTotal)
+	disk := nodePct(snap.DiskUsed, snap.DiskTotal)
+	if prev.CPU < float64(cpuAlert) && snap.CPU >= float64(cpuAlert) {
+		n.eventLocked("warn", "CPU 冲高", fmt.Sprintf("CPU %.1f%%，超过阈值 %d%%", snap.CPU, cpuAlert), snap, 5*time.Minute)
+	}
+	if prevMem < float64(memAlert) && mem >= float64(memAlert) {
+		n.eventLocked("warn", "内存吃紧", fmt.Sprintf("内存 %.1f%%，超过阈值 %d%%", mem, memAlert), snap, 5*time.Minute)
+	}
+	if prevDisk < float64(diskAlert) && disk >= float64(diskAlert) {
+		n.eventLocked("warn", "磁盘告急", fmt.Sprintf("磁盘 %.1f%%，超过阈值 %d%%", disk, diskAlert), snap, 10*time.Minute)
+	}
+	if prev.Temp < 85 && snap.Temp >= 85 {
+		n.eventLocked("warn", "温度过高", fmt.Sprintf("%.0f°C", snap.Temp), snap, 10*time.Minute)
+	}
+	prevStopped := 0
+	if prev.DockerTotal > 0 {
+		prevStopped = prev.DockerTotal - prev.DockerRunning
+	}
+	stopped := 0
+	if snap.DockerTotal > 0 {
+		stopped = snap.DockerTotal - snap.DockerRunning
+	}
+	if stopped > prevStopped {
+		n.eventLocked("warn", "容器退出", fmt.Sprintf("%d 个容器未运行（共 %d 个）", stopped, snap.DockerTotal), snap, 10*time.Minute)
+	}
+}
+
+func (n *Node) eventLocked(level, title, detail string, snap metrics.Snapshot, cooldown time.Duration) {
+	now := time.Now()
+	if cooldown > 0 {
+		if last, ok := n.lastEvent[title]; ok && now.Sub(last) < cooldown {
+			return
+		}
+	}
+	if n.lastEvent == nil {
+		n.lastEvent = map[string]time.Time{}
+	}
+	n.lastEvent[title] = now
+	n.events = append(n.events, Event{
+		Time:     now.Unix(),
+		Level:    level,
+		Title:    title,
+		Detail:   detail,
+		Snapshot: snap,
+	})
+	if len(n.events) > 200 {
+		n.events = append([]Event(nil), n.events[len(n.events)-200:]...)
+	}
+}
+
+func (n *Node) appendTrendLocked(snap metrics.Snapshot) {
+	t := time.Unix(snap.Time, 0)
+	if snap.Time == 0 {
+		t = time.Now()
+	}
+	if !n.lastTrend.IsZero() && t.Sub(n.lastTrend) < 5*time.Minute {
+		return
+	}
+	n.lastTrend = t
+	n.trend = append(n.trend, snap)
+	if len(n.trend) > 2016 {
+		n.trend = append([]metrics.Snapshot(nil), n.trend[len(n.trend)-2016:]...)
+	}
+}
+
+func (n *Node) Trend() []metrics.Snapshot {
+	n.mu.RLock()
+	defer n.mu.RUnlock()
+	return append([]metrics.Snapshot(nil), n.trend...)
+}
+
+func (n *Node) Events() []Event {
+	n.mu.RLock()
+	defer n.mu.RUnlock()
+	return append([]Event(nil), n.events...)
 }
 
 func (n *Node) View() View {

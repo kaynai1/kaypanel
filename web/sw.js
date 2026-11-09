@@ -1,4 +1,4 @@
-const CACHE = 'kaypanel-v1';
+const CACHE = 'kaypanel-v2';
 const SHELL = ['/', '/assets/style.css', '/assets/app.js', '/assets/logo.svg', '/assets/vendor/xterm.css', '/manifest.webmanifest'];
 
 self.addEventListener('install', e => {

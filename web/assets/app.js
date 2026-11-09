@@ -1,6 +1,6 @@
 'use strict';
 
-const TOP_PAGES = ['overview', 'containers', 'apps', 'files', 'terminal', 'ai', 'settings'];
+const TOP_PAGES = ['overview', 'personality', 'timeline', 'containers', 'apps', 'files', 'terminal', 'ai', 'settings'];
 const $ = (sel, el = document) => el.querySelector(sel);
 const $$ = (sel, el = document) => Array.from(el.querySelectorAll(sel));
 
@@ -44,6 +44,19 @@ const state = {
   inspect: null,
   inspectBusy: false,
   inspectError: '',
+  personality: null,
+  personalityBusy: false,
+  personalityError: '',
+  timeline: null,
+  timelineBusy: false,
+  timelineError: '',
+  timelineNode: 'all',
+  timelineLevel: 'all',
+  timelineOpen: {},
+  aiStackPrompt: '',
+  aiStackBusy: false,
+  aiStackResult: null,
+  aiStackError: '',
   trendMetric: 'cpu',
   autoRefresh: prefOn('kp_auto'),
   procOn: prefOn('kp_proc'),
@@ -72,6 +85,8 @@ const ICON_PATHS = {
   chevron: '<path d="m6 9 6 6 6-6"/>',
   logout: '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5"/><path d="M21 12H9"/>',
   activity: '<path d="M3 12h4l2.4-7 4.8 14 2.4-7H21"/>',
+  heart: '<path d="M19.5 12.6 12 20l-7.5-7.4a4.6 4.6 0 0 1 0-6.6 4.7 4.7 0 0 1 6.6 0l.9.9.9-.9a4.7 4.7 0 0 1 6.6 0 4.6 4.6 0 0 1 0 6.6Z"/>',
+  clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2"/>',
   wall: '<rect x="2.5" y="4" width="19" height="12.5" rx="2"/><path d="M8 20h8"/><path d="M12 16.5V20"/>',
   expand: '<path d="M8 3H3v5"/><path d="M16 3h5v5"/><path d="M16 21h5v-5"/><path d="M8 21H3v-5"/>',
   spark: '<path d="M12 3l1.8 4.9L19 10l-5.2 2.1L12 17l-1.8-4.9L5 10l5.2-2.1L12 3Z"/><path d="M18.5 15l.8 2.2L21.5 18l-2.2.8-.8 2.2-.8-2.2L15.5 18l2.2-.8.8-2.2Z"/>',
@@ -283,6 +298,8 @@ function renderShell() {
       <nav class="side-nav" id="sideNav">
         <div class="nav-group">监控</div>
         <button class="nav-item" data-page="overview">${ico('overview')}<span>概览</span></button>
+        <button class="nav-item" data-page="personality">${ico('heart')}<span>性格周报</span></button>
+        <button class="nav-item" data-page="timeline">${ico('clock')}<span>故障回放</span></button>
         <button class="nav-item" data-page="containers">${ico('container')}<span>容器</span><span class="nav-badge hidden" id="navCtrBadge"></span></button>
         <button class="nav-item" data-page="apps">${ico('app')}<span>应用</span></button>
         <div class="nav-group">工具</div>
@@ -397,6 +414,8 @@ function refreshCurrentPage() {
   if (state.subview && state.subview.type === 'inspect') { loadInspect(); return; }
   switch (state.page) {
     case 'overview': loadOverview(true); loadProcesses(); break;
+    case 'personality': loadPersonality(true); break;
+    case 'timeline': loadTimeline(true); break;
     case 'containers': loadContainers(); break;
     case 'apps': loadStacks(); break;
     case 'files': loadFiles(state.filePath); break;
@@ -490,6 +509,11 @@ function selectNode(id) {
   state.processes = [];
   state.procNode = '';
   state.aiMessages = [];
+  if (state.subview && state.subview.type === 'ai-stack') {
+    state.subview = null;
+    state.aiStackResult = null;
+    state.aiStackError = '';
+  }
   closeNodeMenu();
   updateTabs();
   updateNodePills();
@@ -531,8 +555,11 @@ function renderPage() {
   if (sub && sub.type === 'file-edit') return renderFileEditor(sub);
   if (sub && sub.type === 'node-edit') return renderNodeForm(sub);
   if (sub && sub.type === 'inspect') return renderInspect();
+  if (sub && sub.type === 'ai-stack') return renderAIStack();
   switch (state.page) {
     case 'overview': return renderOverview();
+    case 'personality': return renderPersonality();
+    case 'timeline': return renderTimeline();
     case 'containers': return renderContainers();
     case 'apps': return renderApps();
     case 'files': return renderFiles();
@@ -1484,6 +1511,7 @@ function renderApps() {
       <div><h1>应用</h1><p class="page-sub">${esc(n.name)} · Compose 应用与一键模板</p></div>
       <div class="head-actions">
         <button class="btn sm" id="stacksRefresh">刷新</button>
+        <button class="btn sm" id="aiStackBtn">${ico('spark')} AI 装应用</button>
         <button class="btn sm primary" id="newStack">新建应用</button>
       </div>
     </section>
@@ -1491,6 +1519,7 @@ function renderApps() {
     <div class="stack-grid" id="stackGrid"><div class="empty">加载中…</div></div>`;
 
   $('#stacksRefresh').addEventListener('click', loadStacks);
+  $('#aiStackBtn').addEventListener('click', openAIStack);
   $('#newStack').addEventListener('click', () => openStackEditor('', true));
   $('#stackGrid').addEventListener('click', onStackClick);
   startPolling(loadStacks, 10000);
@@ -1525,11 +1554,16 @@ function renderStacks() {
   if (!state.stacks.length) {
     grid.innerHTML = `<div class="card empty" style="grid-column:1/-1">
       <h3>还没有 Compose 应用</h3>
-      <p>从内置模板开始，或在浏览器里粘贴自己的 compose 文件。应用目录：${esc(currentNode() ? currentNode().stacks_dir : '')}</p>
-      <button class="btn primary" id="newStackEmpty">新建应用</button>
+      <p>从内置模板开始，或用一句话让 AI 生成部署方案。应用目录：${esc(currentNode() ? currentNode().stacks_dir : '')}</p>
+      <div class="empty-actions">
+        <button class="btn primary" id="newStackEmpty">新建应用</button>
+        <button class="btn" id="aiStackEmpty">${ico('spark')} AI 装应用</button>
+      </div>
     </div>`;
     const b = $('#newStackEmpty');
     if (b) b.addEventListener('click', () => openStackEditor('', true));
+    const a = $('#aiStackEmpty');
+    if (a) a.addEventListener('click', openAIStack);
     return;
   }
   grid.innerHTML = state.stacks.map(s => {
@@ -2584,6 +2618,706 @@ async function copyInspectImage() {
     toast('已复制到剪贴板，可直接粘贴到聊天窗口');
   } catch (e) {
     toast('复制失败，请使用「保存长图」', 'error');
+  }
+}
+
+/* ---------- personality ---------- */
+
+const PERS_TONES = { ok: '#16a34a', good: '#2563eb', fair: '#d97706', bad: '#dc2626', off: '#94a3b8' };
+const PERS_SOFTS = { ok: '#e9f7ef', good: '#eef4ff', fair: '#fff7e8', bad: '#fef2f2', off: '#f1f5f9' };
+
+function stableClass(score, online) {
+  if (!online) return 'off';
+  if (score >= 95) return 'ok';
+  if (score >= 80) return 'good';
+  if (score >= 60) return 'fair';
+  return 'bad';
+}
+
+function stableTone(score, online) { return PERS_TONES[stableClass(score, online)]; }
+
+function fmtDays(v) {
+  v = Number(v) || 0;
+  if (v >= 1) return `${v.toFixed(1)} 天`;
+  if (v > 0) return `${Math.max(1, Math.round(v * 24))} 小时`;
+  return '不到 1 小时';
+}
+
+function loadPersonality(force) {
+  if (state.personalityBusy) return;
+  state.personalityBusy = true;
+  state.personalityError = '';
+  api('/api/personality').then(d => {
+    state.personality = d;
+  }).catch(e => {
+    state.personalityError = e.message;
+    if (force) toast(e.message, 'error');
+  }).finally(() => {
+    state.personalityBusy = false;
+    if (state.page === 'personality' && !state.subview) renderPage();
+  });
+  if (force) toast('正在重新统计…', '', 1500);
+}
+
+function personalityCardHTML(p) {
+  const cls = stableClass(p.stable, p.online);
+  const tags = (p.tags || []).map(t => `<span class="pers-tag">${esc(t)}</span>`).join('');
+  const stat = (label, value) => `<div class="pers-stat"><span>${label}</span><b>${value}</b></div>`;
+  return `<div class="card pers-card tone-${cls}">
+    <div class="pers-card-head">
+      <span class="avatar" style="background:${avatarColor(p.id)}">${esc(initialOf(p.name))}</span>
+      <div class="pers-card-main">
+        <div class="pers-name">${esc(p.name)}<span class="pers-title">${esc(p.title)}</span></div>
+        <div class="pers-sub">${esc(p.user)}@${esc(p.addr)}${p.os ? ' · ' + esc(p.os) : ''}</div>
+      </div>
+      <div class="pers-score"><b>${p.stable}</b><span>${esc(p.stable_text)}</span></div>
+    </div>
+    <div class="pers-tags">${tags || '<span class="pers-tag dim">数据积累中</span>'}</div>
+    <div class="pers-line">${esc(p.line)}</div>
+    <div class="pers-bar"><i class="${cls}" style="width:${Math.max(0, Math.min(100, p.stable))}%"></i></div>
+    <div class="pers-metrics">
+      ${stat('平均 CPU', `${(Number(p.cpu_avg) || 0).toFixed(1)}%`)}
+      ${stat('平均内存', `${(Number(p.mem_avg) || 0).toFixed(1)}%`)}
+      ${stat('磁盘', `${(Number(p.disk_pct) || 0).toFixed(1)}%`)}
+      ${stat('峰值 CPU', `${(Number(p.peak_cpu) || 0).toFixed(0)}%`)}
+      ${stat('事件', `${Number(p.events) || 0} 条`)}
+    </div>
+  </div>`;
+}
+
+function personalityHTML(d) {
+  const nodes = d.nodes || [];
+  const cls = stableClass(d.average, true);
+  const hls = (d.highlights || []).map(h => `<div class="pers-hl">
+    <span>${esc(h.label)}</span><b>${esc(h.name)}</b><i>${esc(h.value)}</i>
+  </div>`).join('');
+  return `<div class="card pers-hero">
+    <div class="insp-ring" style="--pct:${Math.max(0, Math.min(100, d.average))};--tone:${stableTone(d.average, true)}">
+      <div class="insp-ring-in"><b>${d.average}</b><span>平均稳定分</span></div>
+    </div>
+    <div class="pers-hero-main">
+      <div class="pers-hero-title">这周，服务器们有自己的性格 <span class="insp-pill tone-${cls}">${esc(d.average >= 95 ? '都很稳' : d.average >= 80 ? '状态良好' : d.average >= 60 ? '小有波动' : '需要关心')}</span></div>
+      <p>${nodes.length} 台节点，累计观察 ${fmtDays(d.days)}、${d.samples} 个采样点。稳定分从 100 起，按警告与离线事件扣分；性格标签来自平均负载、峰值、夜间活跃度与运行时长。</p>
+      <div class="pers-highlights">${hls || '<span class="muted">数据还太少，先跑一段时间</span>'}</div>
+    </div>
+    <div class="insp-time">报告生成<br><b>${fmtTime(d.time)}</b></div>
+  </div>
+  <div class="pers-grid">${nodes.map(personalityCardHTML).join('') || '<div class="card empty"><h3>还没有节点</h3><p>添加服务器后就能生成性格周报</p></div>'}</div>
+  <div class="insp-foot">性格来自真实监控数据，长图会带上每台节点的标题、标签与稳定分。</div>`;
+}
+
+function renderPersonality() {
+  const page = $('#page');
+  if (!page) return;
+  const d = state.personality;
+  const busy = state.personalityBusy;
+  const canExport = !!d && !busy;
+  page.innerHTML = `
+    <section class="page-head">
+      <div><h1>服务器性格周报</h1><p class="page-sub">${d ? `${fmtTime(d.time)} · ${d.nodes.length} 台节点 · 观察 ${fmtDays(d.days)}` : '正在读取最近 7 天的趋势与事件…'}</p></div>
+      <div class="head-actions">
+        <button class="btn sm" id="persRefresh" ${busy ? 'disabled' : ''}>${busy ? '统计中…' : '重新统计'}</button>
+        <button class="btn sm" id="persCopy" ${canExport ? '' : 'disabled'}>复制图片</button>
+        <button class="btn sm primary" id="persSave" ${canExport ? '' : 'disabled'}>保存长图</button>
+      </div>
+    </section>
+    ${state.personalityError ? `<div class="banner error">${esc(state.personalityError)}</div>` : ''}
+    ${!d ? `<div class="card empty"><h3>${busy ? '正在统计…' : '还没有性格数据'}</h3><p>基于每 5 分钟的趋势采样和故障事件计算，数据会随着运行逐渐变准</p></div>` : personalityHTML(d)}`;
+  $('#persRefresh').addEventListener('click', () => loadPersonality(true));
+  if (canExport) {
+    $('#persSave').addEventListener('click', savePersonalityImage);
+    $('#persCopy').addEventListener('click', copyPersonalityImage);
+  }
+  if (!d && !busy && !state.personalityError) setTimeout(() => loadPersonality(false), 0);
+}
+
+function persBadge(ctx, text, x, y, tone, soft, font) {
+  ctx.font = '600 11.5px ' + INSPECT_FONT;
+  const w = ctx.measureText(text).width + 16;
+  roundRectPath(ctx, x, y, w, 21, 10.5);
+  ctx.fillStyle = soft; ctx.fill();
+  ctx.fillStyle = tone;
+  ctx.textBaseline = 'middle';
+  ctx.fillText(text, x + 8, y + 11.5);
+  ctx.textBaseline = 'alphabetic';
+  return w;
+}
+
+function buildPersonalityCanvas(d) {
+  const dpr = 2;
+  const W = 900, pad = 36;
+  const cardX = pad, cardW = W - pad * 2;
+  const headerH = 210, hlH = 64, hlGap = 24, nodeH = 182, nodeGap = 14, footerH = 76;
+  const nodes = d.nodes || [];
+  const top = pad + headerH + hlGap;
+  const nodesTop = top + (d.highlights && d.highlights.length ? hlH + hlGap : 0);
+  const H = nodesTop + Math.max(nodes.length, 1) * (nodeH + nodeGap) + footerH + 10;
+  const canvas = document.createElement('canvas');
+  canvas.width = W * dpr;
+  canvas.height = H * dpr;
+  const ctx = canvas.getContext('2d');
+  ctx.scale(dpr, dpr);
+
+  ctx.fillStyle = '#eef2f8';
+  ctx.fillRect(0, 0, W, H);
+  roundRectPath(ctx, cardX, pad, cardW, H - pad * 2, 26);
+  ctx.fillStyle = '#ffffff';
+  ctx.fill();
+
+  ctx.save();
+  roundRectPath(ctx, cardX, pad, cardW, headerH, 26);
+  ctx.clip();
+  const g = ctx.createLinearGradient(cardX, pad, cardX + cardW, pad + headerH);
+  g.addColorStop(0, '#4c1d95');
+  g.addColorStop(0.55, '#6d28d9');
+  g.addColorStop(1, '#2563eb');
+  ctx.fillStyle = g;
+  ctx.fillRect(cardX, pad, cardW, headerH);
+  ctx.globalAlpha = 0.1;
+  ctx.fillStyle = '#ffffff';
+  ctx.beginPath(); ctx.arc(cardX + cardW - 70, pad + 20, 150, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath(); ctx.arc(cardX + cardW - 260, pad + headerH + 50, 100, 0, Math.PI * 2); ctx.fill();
+  ctx.globalAlpha = 1;
+
+  ctx.fillStyle = 'rgba(233, 213, 255, 0.95)';
+  ctx.font = '600 13px ' + INSPECT_FONT;
+  ctx.fillText('KAYPANEL · 性格周报', cardX + 44, pad + 48);
+  ctx.fillStyle = '#ffffff';
+  ctx.font = '700 34px ' + INSPECT_FONT;
+  ctx.fillText('服务器性格周报', cardX + 44, pad + 102);
+  ctx.fillStyle = 'rgba(237, 233, 254, 0.92)';
+  ctx.font = '400 14px ' + INSPECT_FONT;
+  ctx.fillText(`${fmtTime(d.time)} · ${nodes.length} 台节点 · 观察 ${fmtDays(d.days)}`, cardX + 44, pad + 136);
+  ctx.fillStyle = 'rgba(237, 233, 254, 0.72)';
+  ctx.font = '400 12px ' + INSPECT_FONT;
+  ctx.fillText(`${d.samples} 个采样点 · 稳定分满分 100`, cardX + 44, pad + 168);
+
+  const cx = cardX + cardW - 112, cy = pad + 104, r = 62;
+  ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2);
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.14)'; ctx.fill();
+  ctx.lineWidth = 2; ctx.strokeStyle = 'rgba(255, 255, 255, 0.28)';
+  ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.stroke();
+  ctx.lineWidth = 7; ctx.lineCap = 'round'; ctx.strokeStyle = '#ffffff';
+  ctx.beginPath();
+  ctx.arc(cx, cy, r - 8, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * Math.max(0, Math.min(100, d.average)) / 100);
+  ctx.stroke();
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#ffffff'; ctx.font = '700 42px ' + INSPECT_FONT;
+  ctx.fillText(String(d.average), cx, cy + 10);
+  ctx.fillStyle = 'rgba(237, 233, 254, 0.9)'; ctx.font = '400 12px ' + INSPECT_FONT;
+  ctx.fillText('平均稳定分', cx, cy + 32);
+  ctx.textAlign = 'left';
+  ctx.restore();
+
+  const hls = d.highlights || [];
+  if (hls.length) {
+    const bw = (cardW - 56 - (hls.length - 1) * 10) / hls.length;
+    hls.forEach((h, i) => {
+      const bx = cardX + 28 + i * (bw + 10);
+      roundRectPath(ctx, bx, top, bw, hlH, 12);
+      ctx.fillStyle = '#f7f9fd'; ctx.fill();
+      ctx.lineWidth = 1; ctx.strokeStyle = '#e8edf6'; ctx.stroke();
+      ctx.fillStyle = '#7c8798'; ctx.font = '400 11px ' + INSPECT_FONT;
+      ctx.fillText(fitCanvasText(ctx, h.label, bw - 26), bx + 13, top + 20);
+      ctx.fillStyle = '#0f172a'; ctx.font = '600 15px ' + INSPECT_FONT;
+      ctx.fillText(fitCanvasText(ctx, h.name, bw - 26), bx + 13, top + 40);
+      ctx.fillStyle = '#6d28d9'; ctx.font = '600 12px ' + INSPECT_FONT;
+      ctx.fillText(fitCanvasText(ctx, h.value, bw - 26), bx + 13, top + 56);
+    });
+  }
+
+  let y = nodesTop;
+  if (!nodes.length) {
+    ctx.fillStyle = '#94a3b8'; ctx.font = '400 14px ' + INSPECT_FONT;
+    ctx.textAlign = 'center';
+    ctx.fillText('尚未添加节点', W / 2, y + 80);
+    ctx.textAlign = 'left';
+  }
+  for (const p of nodes) {
+    const cls = stableClass(p.stable, p.online);
+    const tone = PERS_TONES[cls], soft = PERS_SOFTS[cls];
+    const x = cardX + 28, w = cardW - 56;
+    roundRectPath(ctx, x, y, w, nodeH, 16);
+    ctx.fillStyle = '#fbfcfe'; ctx.fill();
+    ctx.lineWidth = 1; ctx.strokeStyle = '#e5eaf2'; ctx.stroke();
+    roundRectPath(ctx, x, y + 16, 5, nodeH - 32, 2.5);
+    ctx.fillStyle = tone; ctx.fill();
+
+    const nx = x + 26;
+    ctx.fillStyle = '#0f172a'; ctx.font = '600 18px ' + INSPECT_FONT;
+    ctx.fillText(fitCanvasText(ctx, p.name, 330), nx, y + 34);
+    ctx.font = '600 18px ' + INSPECT_FONT;
+    const badgeX = nx + Math.min(ctx.measureText(p.name).width, 330) + 10;
+    persBadge(ctx, p.title || '观察中', badgeX, y + 17, tone, soft);
+
+    ctx.textAlign = 'right';
+    ctx.fillStyle = tone; ctx.font = '700 30px ' + INSPECT_FONT;
+    ctx.fillText(String(p.stable), x + w - 26, y + 40);
+    ctx.fillStyle = tone; ctx.font = '600 11.5px ' + INSPECT_FONT;
+    ctx.fillText(p.stable_text || '', x + w - 26, y + 58);
+    ctx.textAlign = 'left';
+
+    ctx.fillStyle = '#64748b'; ctx.font = '400 12px ' + INSPECT_FONT;
+    const subtitle = `${p.user ? p.user + '@' : ''}${p.addr}${p.os ? ' · ' + p.os : ''}`;
+    ctx.fillText(fitCanvasText(ctx, subtitle, 500), nx, y + 56);
+
+    let tx = nx;
+    let shown = 0;
+    for (const tag of (p.tags || [])) {
+      ctx.font = '600 11.5px ' + INSPECT_FONT;
+      const tw = ctx.measureText(tag).width + 18;
+      if (tx + tw > x + w - 40 || shown >= 4) break;
+      roundRectPath(ctx, tx, y + 70, tw, 22, 6);
+      ctx.fillStyle = soft; ctx.fill();
+      ctx.fillStyle = tone; ctx.font = '500 11.5px ' + INSPECT_FONT;
+      ctx.fillText(tag, tx + 9, y + 85);
+      tx += tw + 7;
+      shown++;
+    }
+
+    ctx.fillStyle = '#52606f'; ctx.font = '400 12.5px ' + INSPECT_FONT;
+    ctx.fillText(fitCanvasText(ctx, p.line || '', w - 52), nx, y + 122);
+
+    const metrics = [
+      ['平均 CPU', `${(Number(p.cpu_avg) || 0).toFixed(0)}%`],
+      ['平均内存', `${(Number(p.mem_avg) || 0).toFixed(0)}%`],
+      ['磁盘', `${(Number(p.disk_pct) || 0).toFixed(0)}%`],
+      ['峰值 CPU', `${(Number(p.peak_cpu) || 0).toFixed(0)}%`],
+      ['事件', `${Number(p.events) || 0} 条`],
+    ];
+    const mw = (w - 52) / 5;
+    metrics.forEach(([label, value], i) => {
+      const mx = nx + i * mw;
+      ctx.fillStyle = '#8a94a6'; ctx.font = '400 10.5px ' + INSPECT_FONT;
+      ctx.fillText(label, mx, y + 146);
+      ctx.fillStyle = '#334155'; ctx.font = '600 14px ' + INSPECT_FONT;
+      ctx.fillText(value, mx, y + 166);
+    });
+
+    y += nodeH + nodeGap;
+  }
+
+  const fy = H - pad - 26;
+  ctx.strokeStyle = '#e9edf4';
+  ctx.beginPath(); ctx.moveTo(cardX + 44, fy - 22); ctx.lineTo(cardX + cardW - 44, fy - 22); ctx.stroke();
+  ctx.fillStyle = '#94a3b8'; ctx.font = '400 12px ' + INSPECT_FONT;
+  ctx.fillText('由 KayPanel 自动生成 · 基于最近 7 天监控数据', cardX + 44, fy);
+  ctx.textAlign = 'right';
+  ctx.fillText(`KayPanel ${d.version || ''}`, cardX + cardW - 44, fy);
+  ctx.textAlign = 'left';
+  return canvas;
+}
+
+function downloadCanvas(canvas, filename, okText) {
+  canvas.toBlob(blob => {
+    if (!blob) { toast('生成图片失败', 'error'); return; }
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+    toast(okText || '长图已保存');
+  }, 'image/png');
+}
+
+async function copyCanvas(canvas) {
+  try {
+    if (!navigator.clipboard || typeof ClipboardItem === 'undefined') throw new Error('unsupported');
+    const blob = await new Promise(res => canvas.toBlob(res, 'image/png'));
+    await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+    toast('已复制到剪贴板，可直接粘贴到聊天窗口');
+  } catch (e) {
+    toast('复制失败，请使用「保存长图」', 'error');
+  }
+}
+
+function savePersonalityImage() {
+  const d = state.personality;
+  if (!d) return;
+  downloadCanvas(buildPersonalityCanvas(d), `KayPanel-性格周报-${inspectStamp()}.png`, '性格周报长图已保存');
+}
+
+function copyPersonalityImage() {
+  const d = state.personality;
+  if (!d) return;
+  copyCanvas(buildPersonalityCanvas(d));
+}
+
+/* ---------- timeline ---------- */
+
+const TL_LEVELS = {
+  error: { label: '异常', color: '#dc2626', soft: '#fef2f2' },
+  warn: { label: '警告', color: '#d97706', soft: '#fff7e8' },
+  info: { label: '信息', color: '#2563eb', soft: '#eef4ff' },
+};
+
+function loadTimeline(force) {
+  if (state.timelineBusy) return;
+  state.timelineBusy = true;
+  state.timelineError = '';
+  api('/api/events').then(d => {
+    state.timeline = d;
+  }).catch(e => {
+    state.timelineError = e.message;
+    if (force) toast(e.message, 'error');
+  }).finally(() => {
+    state.timelineBusy = false;
+    if (state.page === 'timeline' && !state.subview) renderPage();
+  });
+  if (force) toast('正在刷新事件…', '', 1500);
+}
+
+function fmtSpan(sec) {
+  sec = Math.max(0, Number(sec) || 0);
+  if (sec >= 86400) return `${(sec / 86400).toFixed(1)} 天`;
+  if (sec >= 3600) return `${(sec / 3600).toFixed(1)} 小时`;
+  if (sec >= 60) return `${Math.round(sec / 60)} 分钟`;
+  return `${Math.round(sec)} 秒`;
+}
+
+function tlSparkCard(n, d) {
+  const pts = (d.trends && d.trends[n.id]) || [];
+  const span = pts.length > 1 ? pts[pts.length - 1].t - pts[0].t : 0;
+  let chart;
+  if (n.sftp_only) {
+    chart = `<div class="tl-spark-empty">仅文件管理，不采集系统指标</div>`;
+  } else if (pts.length < 2) {
+    chart = `<div class="tl-spark-empty">采样中，趋势会在几分钟后出现</div>`;
+  } else {
+    chart = chartSVG([
+      { values: pts.map(p => Number(p.cpu) || 0), color: '#2563eb', fill: true },
+      { values: pts.map(p => Number(p.mem) || 0), color: '#7c3aed' },
+      { values: pts.map(p => Number(p.disk) || 0), color: '#d97706' },
+    ], { height: 54, max: 100 });
+  }
+  return `<div class="card tl-spark">
+    <div class="tl-spark-head">
+      <span class="dot ${n.online ? 'online' : 'offline'}"></span>
+      <b>${esc(n.name)}</b>
+      <span class="spacer"></span>
+      <span class="tl-spark-events">${n.events} 事件</span>
+    </div>
+    <div class="tl-spark-chart">${chart}</div>
+    <div class="tl-spark-foot">
+      <span class="tl-leg"><i style="background:#2563eb"></i>CPU</span>
+      <span class="tl-leg"><i style="background:#7c3aed"></i>内存</span>
+      <span class="tl-leg"><i style="background:#d97706"></i>磁盘</span>
+      <span class="spacer"></span>
+      <span>${pts.length > 1 ? `近 ${fmtSpan(span)} · ${pts.length} 点` : n.sftp_only ? '无指标' : '采样中'}</span>
+    </div>
+  </div>`;
+}
+
+function tlEventHTML(e, open) {
+  const lv = TL_LEVELS[e.level] || TL_LEVELS.info;
+  const key = `${e.node_id}:${e.time}:${e.title}`;
+  const metric = (label, value) => `<span class="tl-m"><span>${label}</span><b>${value}</b></span>`;
+  return `<div class="tl-ev ${esc(e.level)}${open ? ' open' : ''}" data-ev="${esc(key)}">
+    <div class="tl-rail"><i style="background:${lv.color}"></i></div>
+    <div class="tl-ev-body">
+      <div class="tl-ev-head">
+        <span class="tl-badge" style="color:${lv.color};background:${lv.soft}">${lv.label}</span>
+        <span class="tl-ev-title">${esc(e.title)}</span>
+        <span class="tl-ev-node">${esc(e.node_name)}</span>
+        <span class="spacer"></span>
+        <span class="tl-ev-time">${fmtTime(e.time)}</span>
+        <span class="tl-ev-ago">${timeAgo(e.time)}</span>
+      </div>
+      ${e.detail ? `<div class="tl-ev-detail">${esc(e.detail)}</div>` : ''}
+      <div class="tl-ev-more" ${open ? '' : 'hidden'}>
+        ${metric('CPU', fmtPct(e.cpu))}
+        ${metric('内存', fmtPct(e.mem_pct))}
+        ${metric('磁盘', fmtPct(e.disk_pct))}
+        ${metric('负载', (Number(e.load1) || 0).toFixed(2))}
+        ${e.temp > 0 ? metric('温度', `${Number(e.temp).toFixed(0)}°C`) : ''}
+        ${metric('容器', e.docker_total > 0 ? `${e.docker_running}/${e.docker_total}` : '未安装')}
+      </div>
+      <button type="button" class="tl-ev-toggle">${open ? '收起指标' : '指标快照'}</button>
+    </div>
+  </div>`;
+}
+
+function timelineDayLabel(unix) {
+  const d = new Date(unix * 1000);
+  return d.toLocaleDateString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'long' });
+}
+
+function timelineHTML(d) {
+  const nodes = d.nodes || [];
+  const all = d.events || [];
+  const errors = all.filter(e => e.level === 'error').length;
+  const warns = all.filter(e => e.level === 'warn').length;
+  const nodeCount = {};
+  all.forEach(e => { nodeCount[e.node_id] = (nodeCount[e.node_id] || 0) + 1; });
+  const levelCount = { all: all.length, error: errors, warn: warns, info: all.length - errors - warns };
+  const nodeChips = [`<button class="tl-chip ${state.timelineNode === 'all' ? 'active' : ''}" data-tlnode="all">全部节点 ${all.length}</button>`]
+    .concat(nodes.map(n => `<button class="tl-chip ${state.timelineNode === n.id ? 'active' : ''}" data-tlnode="${esc(n.id)}">${esc(n.name)} ${nodeCount[n.id] || 0}</button>`))
+    .join('');
+  const levelChips = ['all', 'error', 'warn', 'info'].map(k => {
+    const label = k === 'all' ? '全部级别' : TL_LEVELS[k].label;
+    return `<button class="tl-chip ${state.timelineLevel === k ? 'active' : ''} ${k}" data-tllevel="${k}">${label} ${levelCount[k]}</button>`;
+  }).join('');
+  const filtered = all.filter(e =>
+    (state.timelineNode === 'all' || e.node_id === state.timelineNode) &&
+    (state.timelineLevel === 'all' || e.level === state.timelineLevel));
+  let rows = '';
+  let day = '';
+  for (const e of filtered) {
+    const label = timelineDayLabel(e.time);
+    if (label !== day) {
+      day = label;
+      rows += `<div class="tl-day">${esc(label)}</div>`;
+    }
+    const key = `${e.node_id}:${e.time}:${e.title}`;
+    rows += tlEventHTML(e, !!state.timelineOpen[key]);
+  }
+  return `<div class="card tl-summary">
+      <div class="tl-summary-main">
+        <div class="tl-summary-title">最近 7 天共记录 ${all.length} 条事件</div>
+        <p>异常 ${errors} 条、警告 ${warns} 条。节点离线、CPU / 内存 / 磁盘越过阈值、容器退出、温度过高都会被记录，并附带当时的指标快照。</p>
+      </div>
+      <div class="tl-summary-chips">
+        <span class="tl-count bad"><b>${errors}</b>异常</span>
+        <span class="tl-count warn"><b>${warns}</b>警告</span>
+        <span class="tl-count info"><b>${levelCount.info}</b>信息</span>
+      </div>
+    </div>
+    <div class="tl-spark-grid">${nodes.map(n => tlSparkCard(n, d)).join('')}</div>
+    <div class="tl-filters">
+      <div class="tl-chip-row">${nodeChips}</div>
+      <div class="tl-chip-row">${levelChips}</div>
+    </div>
+    <div class="card tl-list">
+      <div class="tl-list-head"><h2>故障回放</h2><span>${filtered.length} 条 · 按时间倒序</span></div>
+      ${rows || `<div class="empty"><h3>没有匹配的事件</h3><p>换个筛选条件，或等下一次阈值触发</p></div>`}
+    </div>`;
+}
+
+function renderTimeline() {
+  const page = $('#page');
+  if (!page) return;
+  const d = state.timeline;
+  const busy = state.timelineBusy;
+  page.innerHTML = `
+    <section class="page-head">
+      <div><h1>故障回放时间轴</h1><p class="page-sub">${d ? `${fmtTime(d.time)} · ${d.nodes.length} 台节点 · ${(d.events || []).length} 条事件` : '正在读取事件与趋势…'}</p></div>
+      <div class="head-actions">
+        <button class="btn sm" id="tlRefresh" ${busy ? 'disabled' : ''}>${busy ? '刷新中…' : '刷新'}</button>
+      </div>
+    </section>
+    ${state.timelineError ? `<div class="banner error">${esc(state.timelineError)}</div>` : ''}
+    ${!d ? `<div class="card empty"><h3>${busy ? '正在读取…' : '还没有事件数据'}</h3><p>事件会在节点离线或指标越过阈值时自动记录，趋势每 5 分钟落一个点</p></div>` : timelineHTML(d)}`;
+  $('#tlRefresh').addEventListener('click', () => loadTimeline(true));
+  if (d) {
+    $$('[data-tlnode]').forEach(b => b.addEventListener('click', () => {
+      state.timelineNode = b.dataset.tlnode;
+      renderPage();
+    }));
+    $$('[data-tllevel]').forEach(b => b.addEventListener('click', () => {
+      state.timelineLevel = b.dataset.tllevel;
+      renderPage();
+    }));
+    const list = $('.tl-list');
+    if (list) {
+      list.addEventListener('click', ev => {
+        const row = ev.target.closest('[data-ev]');
+        if (!row) return;
+        const key = row.dataset.ev;
+        state.timelineOpen[key] = !state.timelineOpen[key];
+        const open = !!state.timelineOpen[key];
+        row.classList.toggle('open', open);
+        const more = row.querySelector('.tl-ev-more');
+        if (more) more.hidden = !open;
+        const t = row.querySelector('.tl-ev-toggle');
+        if (t) t.textContent = open ? '收起指标' : '指标快照';
+      });
+    }
+  }
+  if (!d && !busy && !state.timelineError) setTimeout(() => loadTimeline(false), 0);
+}
+
+/* ---------- AI stack ---------- */
+
+const AI_STACK_EXAMPLES = [
+  '搭一个私有云盘，能在浏览器里预览文件',
+  '装 Uptime Kuma 监控我的几个网站',
+  '部署一个轻量博客，支持 Markdown 写作',
+  '装一个 qBittorrent 下载器，带 Web 界面',
+];
+
+function openAIStack() {
+  state.subview = { type: 'ai-stack' };
+  state.aiStackPrompt = '';
+  state.aiStackResult = null;
+  state.aiStackError = '';
+  state.aiStackBusy = false;
+  renderPage();
+}
+
+function aiStackPromptHTML() {
+  const examples = AI_STACK_EXAMPLES.map(x => `<button type="button" class="tl-chip" data-example="${esc(x)}">${esc(x)}</button>`).join('');
+  return `<div class="card ai-stack-card">
+    <div class="ai-stack-intro">
+      <span class="ai-stack-ico">${ico('spark')}</span>
+      <div><h2>一句话装应用</h2><p>描述想装什么，AI 会生成单文件 compose.yaml。生成后可以先预览和修改，确认后才会写入节点。</p></div>
+    </div>
+    <div class="field">
+      <label>想装什么？</label>
+      <textarea id="aiStackPrompt" class="ai-stack-prompt" maxlength="500" placeholder="例如：帮我搭一个家庭影音库，能自动整理电影和剧集">${esc(state.aiStackPrompt)}</textarea>
+      <div class="hint">最多 500 字。AI 会遵守面板安全规则：不生成 privileged / host 网络 / Docker socket 等配置。</div>
+    </div>
+    <div class="ai-stack-examples" id="aiStackExamples">${examples}</div>
+    <div class="form-actions">
+      <button class="btn primary" id="aiStackGen" ${state.aiStackBusy ? 'disabled' : ''}>${state.aiStackBusy ? 'AI 正在设计…' : '生成部署方案'}</button>
+      <span class="hint">${state.aiStackBusy ? '通常需要 10-40 秒，请稍候' : '生成不会改动服务器'}</span>
+    </div>
+  </div>`;
+}
+
+function aiStackPreviewHTML(r) {
+  const images = (r.images || []).map(x => `<span class="tl-chip">${esc(x)}</span>`).join('');
+  const notes = (r.notes || []).length
+    ? `<div class="ai-stack-notes"><h4>部署后</h4><ol>${r.notes.map(x => `<li>${esc(x)}</li>`).join('')}</ol></div>`
+    : '';
+  const warnings = (r.warnings || []).length
+    ? `<div class="ai-stack-notes warn"><h4>需要注意</h4><ul>${r.warnings.map(x => `<li>${esc(x)}</li>`).join('')}</ul></div>`
+    : '';
+  return `<div class="card ai-stack-card">
+    <div class="ai-stack-plan-head">
+      <div>
+        <h2>${esc(r.title || r.name)}</h2>
+        <p>${esc(r.description || 'AI 生成的部署方案')}</p>
+      </div>
+      <div class="ai-stack-meta"><span>${r.services} 个服务</span>${images}</div>
+    </div>
+    <div class="form-grid">
+      <div class="field">
+        <label>应用名称</label>
+        <input type="text" id="aiStackName" value="${esc(r.name)}" maxlength="40">
+        <div class="hint">小写字母、数字、- 或 _，作为 Compose 项目名和目录名</div>
+      </div>
+      <div class="field">
+        <label>镜像</label>
+        <input type="text" value="${esc((r.images || []).join('  ·  '))}" readonly>
+        <div class="hint">来自 AI 生成结果，确认没有拼写错误</div>
+      </div>
+      <div class="field full">
+        <label>compose.yaml</label>
+        <textarea id="aiStackCompose" class="code-editor" spellcheck="false">${esc(r.compose)}</textarea>
+        <div class="hint">保存前会再次经过面板安全校验，带 build、privileged、host 网络等配置会被拒绝</div>
+      </div>
+    </div>
+    <div class="ai-stack-note-grid">${notes}${warnings}</div>
+    <div class="form-actions">
+      <button class="btn primary" id="aiStackDeploy">保存并部署</button>
+      <button class="btn" id="aiStackSaveOnly">仅保存</button>
+      <div class="spacer"></div>
+      <button class="btn ghost" id="aiStackRetry">重新生成</button>
+    </div>
+  </div>`;
+}
+
+function renderAIStack() {
+  const page = $('#page');
+  const n = currentNode();
+  const back = () => { state.subview = null; state.aiStackResult = null; state.aiStackError = ''; renderPage(); };
+  if (!n) {
+    page.innerHTML = `<section class="page-head"><div><h1>AI 装应用</h1><p class="page-sub">用一句话生成 Compose 部署方案</p></div></section>` + noNodeHTML();
+    bindNoNode();
+    return;
+  }
+  if (n.sftp_only) {
+    page.innerHTML = `<section class="page-head"><div><h1>AI 装应用</h1><p class="page-sub">${esc(n.name)}</p></div>
+      <div class="head-actions"><button class="btn sm ghost" id="aiStackBackOnly">返回应用</button></div></section>
+      <div class="card empty"><h3>虚拟主机不支持部署应用</h3><p>这个节点只提供 SFTP 文件管理，请选择一台完整的服务器</p></div>`;
+    $('#aiStackBackOnly').addEventListener('click', back);
+    return;
+  }
+  const r = state.aiStackResult;
+  page.innerHTML = `
+    <section class="page-head">
+      <div><h1>AI 装应用</h1><p class="page-sub">${esc(n.name)} · 一句话生成 Compose 并部署</p></div>
+      <div class="head-actions"><button class="btn sm ghost" id="aiStackBackTop">返回应用</button></div>
+    </section>
+    ${state.aiStackError ? `<div class="banner error">${esc(state.aiStackError)}</div>` : ''}
+    ${r ? aiStackPreviewHTML(r) : aiStackPromptHTML()}`;
+  $('#aiStackBackTop').addEventListener('click', back);
+
+  if (!r) {
+    const ta = $('#aiStackPrompt');
+    $$('#aiStackExamples [data-example]').forEach(b => b.addEventListener('click', () => {
+      ta.value = b.dataset.example;
+      ta.focus();
+    }));
+    $('#aiStackGen').addEventListener('click', generateAIStack);
+    return;
+  }
+
+  const regenerate = () => {
+    state.aiStackResult = null;
+    state.aiStackError = '';
+    renderPage();
+  };
+  $('#aiStackRetry').addEventListener('click', regenerate);
+  $('#aiStackDeploy').addEventListener('click', () => saveAIStack(true));
+  $('#aiStackSaveOnly').addEventListener('click', () => saveAIStack(false));
+}
+
+function generateAIStack() {
+  const n = currentNode();
+  if (!n || state.aiStackBusy) return;
+  const prompt = ($('#aiStackPrompt').value || '').trim();
+  if (!prompt) { toast('先描述一下想装什么', 'error'); return; }
+  state.aiStackPrompt = prompt;
+  state.aiStackBusy = true;
+  state.aiStackError = '';
+  state.aiStackResult = null;
+  renderPage();
+  api('/api/ai/stack', { method: 'POST', body: JSON.stringify({ node_id: n.id, prompt }) }).then(r => {
+    state.aiStackResult = r;
+  }).catch(e => {
+    state.aiStackError = e.message;
+    toast(e.message, 'error', 7000);
+  }).finally(() => {
+    state.aiStackBusy = false;
+    if (state.subview && state.subview.type === 'ai-stack') renderPage();
+  });
+}
+
+async function saveAIStack(deploy) {
+  const n = currentNode();
+  if (!n) return;
+  const name = ($('#aiStackName').value || '').trim();
+  const content = $('#aiStackCompose').value;
+  if (!/^[a-z0-9][a-z0-9_-]{0,62}$/.test(name)) { toast('应用名称仅支持小写字母、数字、- 和 _', 'error'); return; }
+  if (!content.trim()) { toast('Compose 内容不能为空', 'error'); return; }
+  const btn = deploy ? $('#aiStackDeploy') : $('#aiStackSaveOnly');
+  const oldText = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = deploy ? '部署中…' : '保存中…';
+  try {
+    await api(`/api/nodes/${n.id}/stacks/${encodeURIComponent(name)}`, {
+      method: 'PUT',
+      body: JSON.stringify({ content }),
+    });
+    if (deploy) {
+      await api(`/api/nodes/${n.id}/stacks/${encodeURIComponent(name)}/action`, {
+        method: 'POST',
+        body: JSON.stringify({ action: 'up' }),
+      });
+    }
+    toast(deploy ? '已保存并开始启动' : '已保存', 'success', 2200);
+    state.subview = null;
+    state.aiStackResult = null;
+    state.aiStackPrompt = '';
+    navigate('apps');
+  } catch (e) {
+    toast(e.message, 'error', 7000);
+    btn.disabled = false;
+    btn.textContent = oldText;
   }
 }
 
