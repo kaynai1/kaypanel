@@ -40,6 +40,7 @@ const state = {
   hasAIKey: false,
   aiMessages: [],
   aiBusy: false,
+  aiModels: [],
   trendMetric: 'cpu',
   autoRefresh: prefOn('kp_auto'),
   procOn: prefOn('kp_proc'),
@@ -2228,11 +2229,18 @@ function pickModel(models) {
     const hit = models.find(m => m === p || m.endsWith('/' + p));
     if (hit) return hit;
   }
-  const mini = models.find(m => /mini/i.test(m) && !/embed|tts|whisper|image|dall|audio/i.test(m));
+  const mini = models.find(m => /(^|[-_])mini($|[._-])/i.test(m) && !/embed|tts|whisper|image|dall|audio/i.test(m));
   if (mini) return mini;
   const chat = models.find(m => /chat/i.test(m) && !/embed|tts|whisper|image|dall|audio/i.test(m));
   return chat || models[0] || '';
 }
+
+document.addEventListener('mousedown', e => {
+  const menu = document.getElementById('aiModelMenu');
+  if (!menu || menu.hidden) return;
+  if (e.target instanceof Element && e.target.closest('#aiModelCombo')) return;
+  menu.hidden = true;
+});
 
 function renderSettings() {
   const page = $('#page');
@@ -2286,17 +2294,23 @@ function renderSettings() {
         <div class="card settings-card" id="setAI">
           ${settingHead('spark', 'AI 运维助手', 'OpenAI 兼容接口，Base URL 填到 /v1 为止；Key 只保存在本机配置中')}
           <div class="form-grid">
-            <div class="field full"><label>Base URL</label><input type="text" id="aiBase" autocomplete="off" value="${esc(state.settings.ai_base || '')}" placeholder="https://api.example.com/v1"></div>
-            <div class="field">
-              <label>模型</label>
+            <div class="field full">
+              <label>Base URL</label>
               <div class="model-row">
-                <input type="text" id="aiModel" list="aiModelList" autocomplete="off" value="${esc(state.settings.ai_model || '')}" placeholder="gpt-4o-mini">
+                <input type="text" id="aiBase" autocomplete="off" value="${esc(state.settings.ai_base || '')}" placeholder="https://api.example.com/v1">
                 <button class="btn sm ghost" id="aiDetect" type="button" title="从 Base URL 拉取可用模型列表">自动检测</button>
               </div>
-              <datalist id="aiModelList"></datalist>
-              <div class="hint" id="aiDetectHint"></div>
+            </div>
+            <div class="field">
+              <label>模型</label>
+              <div class="combo" id="aiModelCombo">
+                <input type="text" id="aiModel" autocomplete="off" value="${esc(state.settings.ai_model || '')}" placeholder="gpt-4o-mini">
+                <button type="button" class="combo-btn" id="aiModelToggle" aria-label="从检测结果中选择模型">${ico('chevron', 'chev')}</button>
+                <div class="combo-menu" id="aiModelMenu" hidden></div>
+              </div>
             </div>
             <div class="field"><label>API Key</label><input type="password" id="aiKey" autocomplete="new-password" placeholder="${state.hasAIKey ? '已配置，留空保持不变' : 'sk-...'}"></div>
+            <div class="hint full" id="aiDetectHint"></div>
           </div>
           <button class="btn" id="saveAI">保存 AI 设置</button>
         </div>
@@ -2342,6 +2356,36 @@ function renderSettings() {
   $('#saveThresholds').addEventListener('click', e => busyBtn(e.currentTarget, () => saveSettings(settingsPayload(), '阈值已保存'), '保存中…'));
   $('#saveNotify').addEventListener('click', e => busyBtn(e.currentTarget, () => saveSettings(settingsPayload(), '通知设置已保存'), '保存中…'));
   $('#saveAI').addEventListener('click', e => busyBtn(e.currentTarget, () => saveSettings(settingsPayload(), 'AI 设置已保存'), '保存中…'));
+  const modelInput = $('#aiModel');
+  const modelMenu = $('#aiModelMenu');
+  const modelToggle = $('#aiModelToggle');
+  const openModelMenu = (filtered = false) => {
+    const q = filtered ? modelInput.value.trim().toLowerCase() : '';
+    const list = state.aiModels.filter(m => !q || m.toLowerCase().includes(q));
+    modelMenu.innerHTML = !state.aiModels.length
+      ? '<div class="combo-empty">还没有检测结果，点击「自动检测」获取模型列表</div>'
+      : list.length
+        ? list.map(m => `<button type="button" class="combo-item${m === modelInput.value.trim() ? ' active' : ''}" data-model="${esc(m)}">${esc(m)}</button>`).join('')
+        : '<div class="combo-empty">没有匹配的模型</div>';
+    modelMenu.hidden = false;
+  };
+  const closeModelMenu = () => { modelMenu.hidden = true; };
+  modelToggle.addEventListener('mousedown', e => e.preventDefault());
+  modelToggle.addEventListener('click', () => {
+    if (modelMenu.hidden) openModelMenu(); else closeModelMenu();
+    modelInput.focus();
+  });
+  modelInput.addEventListener('focus', () => { if (state.aiModels.length) openModelMenu(); });
+  modelInput.addEventListener('input', () => { if (state.aiModels.length) openModelMenu(true); });
+  modelInput.addEventListener('blur', () => setTimeout(closeModelMenu, 150));
+  modelInput.addEventListener('keydown', e => { if (e.key === 'Escape') closeModelMenu(); });
+  modelMenu.addEventListener('mousedown', e => {
+    const item = e.target.closest('[data-model]');
+    if (!item) return;
+    e.preventDefault();
+    modelInput.value = item.dataset.model;
+    closeModelMenu();
+  });
   $('#aiDetect').addEventListener('click', async () => {
     const btn = $('#aiDetect');
     const base = $('#aiBase').value.trim();
@@ -2352,11 +2396,12 @@ function renderSettings() {
       const key = $('#aiKey').value.trim();
       const d = await api('/api/ai/models', { method: 'POST', body: JSON.stringify({ base_url: base, api_key: key }) });
       const models = (d && d.models) || [];
-      $('#aiModelList').innerHTML = models.map(m => `<option value="${esc(m)}"></option>`).join('');
-      $('#aiDetectHint').textContent = `已检测到 ${models.length} 个模型，点击模型输入框可从列表选择`;
+      state.aiModels = models;
+      $('#aiDetectHint').textContent = `已检测到 ${models.length} 个模型，可在「模型」下拉列表中选择`;
       const cur = $('#aiModel').value.trim();
       const pick = !cur || !models.includes(cur) ? pickModel(models) : '';
       if (pick) $('#aiModel').value = pick;
+      if (models.length) openModelMenu();
       toast(`检测到 ${models.length} 个模型${pick ? '，已填入 ' + pick : ''}`, 'success', 5000);
     } catch (e) {
       toast(e.message, 'error', 7000);

@@ -654,6 +654,17 @@ button { cursor: pointer; }
 .model-row { display: flex; align-items: center; gap: 7px; }
 .model-row input { flex: 1; min-width: 0; }
 .model-row .btn { height: 36px; flex: none; }
+.combo { position: relative; }
+.combo input { width: 100%; padding-right: 34px; }
+.combo-btn { position: absolute; top: 1px; right: 1px; width: 32px; height: 34px; border: 0; background: transparent; color: var(--muted); display: flex; align-items: center; justify-content: center; cursor: pointer; border-radius: 0 7px 7px 0; }
+.combo-btn:hover { color: var(--accent); background: var(--bg-soft); }
+.combo-btn svg { width: 14px; height: 14px; }
+.combo-menu { position: absolute; z-index: 30; top: calc(100% + 4px); left: 0; right: 0; max-height: 220px; overflow: auto; padding: 4px; background: #fff; border: 1px solid var(--line-strong); border-radius: 8px; box-shadow: 0 10px 30px rgba(15, 23, 42, 0.14); }
+.combo-menu[hidden] { display: none; }
+.combo-item { display: block; width: 100%; padding: 7px 9px; border: 0; border-radius: 6px; background: none; color: var(--text-2); font-family: inherit; font-size: 13px; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; }
+.combo-item:hover, .combo-item.active { background: var(--bg-soft); color: var(--text); }
+.combo-empty { padding: 8px 9px; color: var(--faint); font-size: 12px; }
+#aiDetectHint { color: var(--faint); font-size: 12px; line-height: 1.55; }
 #aiDetectHint:empty { display: none; }
 @media (max-width: 560px) { .form-grid.three { grid-template-columns: 1fr; } }
 .field textarea { height: auto; padding: 9px 11px; resize: vertical; }
