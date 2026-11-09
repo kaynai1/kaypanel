@@ -2298,14 +2298,14 @@ function renderSettings() {
               <label>Base URL</label>
               <div class="model-row">
                 <input type="text" id="aiBase" autocomplete="off" value="${esc(state.settings.ai_base || '')}" placeholder="https://api.example.com/v1">
-                <button class="btn sm ghost" id="aiDetect" type="button" title="从 Base URL 拉取可用模型列表">自动检测</button>
+                <button class="btn sm" id="aiDetect" type="button" title="从 Base URL 拉取可用模型列表">自动检测</button>
               </div>
             </div>
             <div class="field">
               <label>模型</label>
               <div class="combo" id="aiModelCombo">
                 <input type="text" id="aiModel" autocomplete="off" value="${esc(state.settings.ai_model || '')}" placeholder="gpt-4o-mini">
-                <button type="button" class="combo-btn" id="aiModelToggle" aria-label="从检测结果中选择模型">${ico('chevron', 'chev')}</button>
+                <button type="button" class="combo-btn" id="aiModelToggle" aria-label="从检测结果中选择模型" title="从检测结果中选择模型">${ico('chevron', 'chev')}</button>
                 <div class="combo-menu" id="aiModelMenu" hidden></div>
               </div>
             </div>
