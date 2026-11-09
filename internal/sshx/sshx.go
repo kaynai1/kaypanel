@@ -64,6 +64,8 @@ func (c *Client) ensure() (*ssh.Client, error) {
 	}
 	auths := []ssh.AuthMethod{}
 	switch c.cfg.AuthType {
+	case "none":
+		// Token 用户名主机（如 Instabox）：x/crypto/ssh 会先自动尝试 RFC 4252 的 none 认证
 	case "password":
 		if c.cfg.Password == "" {
 			return nil, fmt.Errorf("节点未配置密码")

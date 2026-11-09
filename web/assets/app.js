@@ -2028,8 +2028,9 @@ function renderNodeForm(sub) {
         <div class="field">
           <label>认证方式</label>
           <div class="radio-row">
-            <label><input type="radio" name="authType" value="key" ${!n || n.auth_type !== 'password' ? 'checked' : ''}> 私钥</label>
+            <label><input type="radio" name="authType" value="key" ${!n || n.auth_type === 'key' ? 'checked' : ''}> 私钥</label>
             <label><input type="radio" name="authType" value="password" ${n && n.auth_type === 'password' ? 'checked' : ''}> 密码</label>
+            <label><input type="radio" name="authType" value="none" ${n && n.auth_type === 'none' ? 'checked' : ''}> 无认证</label>
           </div>
         </div>
         <div class="field full" id="keyField">
@@ -2047,6 +2048,9 @@ function renderNodeForm(sub) {
         <div class="field full hidden" id="passwordField">
           <label>SSH 密码</label>
           <input type="password" id="nodePassword" autocomplete="new-password" placeholder="${editing && n.has_password ? '留空表示不修改已保存的密码' : 'SSH 登录密码'}">
+        </div>
+        <div class="field full hidden" id="noneField">
+          <div class="hint">主机只认用户名、不校验密码或密钥（如 Instabox 的 ibssh_… 用户名）。连接时不会发送任何凭据。</div>
         </div>
         <div class="field"><label>文件根目录</label><input type="text" id="nodeFileRoot" value="${esc(n ? n.file_root : '/')}" placeholder="/ 或 /vol1"></div>
         <div class="field"><label>Compose 应用目录</label><input type="text" id="nodeStacksDir" value="${esc(n ? n.stacks_dir : '')}" placeholder="留空使用 ~/kaypanel/stacks"></div>
@@ -2077,6 +2081,7 @@ function renderNodeForm(sub) {
     const type = $('input[name=authType]:checked').value;
     $('#keyField').classList.toggle('hidden', type !== 'key');
     $('#passwordField').classList.toggle('hidden', type !== 'password');
+    $('#noneField').classList.toggle('hidden', type !== 'none');
   };
   $$('input[name=authType]').forEach(r => r.addEventListener('change', syncAuth));
   syncAuth();

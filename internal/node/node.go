@@ -280,7 +280,7 @@ func normalize(c config.Node) (config.Node, error) {
 	if !userRe.MatchString(c.User) {
 		return c, fmt.Errorf("SSH 用户名不合法")
 	}
-	if c.AuthType != "password" {
+	if c.AuthType != "password" && c.AuthType != "none" {
 		c.AuthType = "key"
 	}
 	if c.AuthType == "key" && strings.TrimSpace(c.PrivateKey) == "" {
