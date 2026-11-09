@@ -55,7 +55,7 @@ func TestAddTagCap(t *testing.T) {
 }
 
 func TestPersonalityOffline(t *testing.T) {
-	p := personalityOf(node.View{ID: "n1", Name: "测试机", Online: false}, nil, nil)
+	p := personalityOf(node.View{Name: "测试机", Online: false}, nil, nil)
 	if p.Title != "失联中" || p.Stable != 0 || p.StableText != "等待重连" {
 		t.Fatalf("unexpected offline personality: %+v", p)
 	}
