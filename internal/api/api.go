@@ -105,6 +105,9 @@ func (s *Server) securityHeaders(next http.Handler) http.Handler {
 		h.Set("Referrer-Policy", "no-referrer")
 		h.Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
 		h.Set("Content-Security-Policy", "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' ws: wss:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'")
+		if strings.HasPrefix(r.URL.Path, "/api/") {
+			h.Set("Cache-Control", "no-store")
+		}
 		if r.TLS != nil || strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https") {
 			h.Set("Strict-Transport-Security", "max-age=31536000")
 		}
@@ -118,12 +121,41 @@ func (s *Server) serveStatic(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	if p == "/" || p == "/index.html" {
+		s.serveIndex(w, r)
+		return
+	}
 	if strings.HasPrefix(p, "/assets/") {
 		w.Header().Set("Cache-Control", "public, max-age=86400")
 	} else {
 		w.Header().Set("Cache-Control", "no-store")
 	}
 	http.FileServer(s.web).ServeHTTP(w, r)
+}
+
+func (s *Server) serveIndex(w http.ResponseWriter, r *http.Request) {
+	f, err := s.web.Open("index.html")
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	defer f.Close()
+	b, err := io.ReadAll(io.LimitReader(f, 1<<20))
+	if err != nil {
+		http.Error(w, "读取页面失败", http.StatusInternalServerError)
+		return
+	}
+	html := string(b)
+	for _, a := range []string{
+		"/assets/style.css", "/assets/logo.svg", "/assets/app.js",
+		"/assets/vendor/xterm.css", "/assets/vendor/xterm.js", "/assets/vendor/addon-fit.js",
+	} {
+		html = strings.ReplaceAll(html, `"`+a+`"`, `"`+a+`?v=`+s.version+`"`)
+	}
+	h := w.Header()
+	h.Set("Content-Type", "text/html; charset=utf-8")
+	h.Set("Cache-Control", "no-store")
+	_, _ = w.Write([]byte(html))
 }
 
 func (s *Server) auth(h http.HandlerFunc) http.Handler {
