@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 )
@@ -17,6 +18,7 @@ type Message struct {
 }
 
 var client = &http.Client{Timeout: 120 * time.Second}
+var modelClient = &http.Client{Timeout: 20 * time.Second}
 
 func endpoint(base string) string {
 	base = strings.TrimRight(strings.TrimSpace(base), "/")
@@ -74,6 +76,79 @@ func Chat(ctx context.Context, base, key, model string, messages []Message) (str
 		return "", fmt.Errorf("AI 返回内容为空")
 	}
 	return strings.TrimSpace(out.Choices[0].Message.Content), nil
+}
+
+func modelsEndpoint(base string) string {
+	base = strings.TrimRight(strings.TrimSpace(base), "/")
+	if strings.HasSuffix(base, "/chat/completions") {
+		base = strings.TrimSuffix(base, "/chat/completions")
+	}
+	return base + "/models"
+}
+
+func Models(ctx context.Context, base, key string) ([]string, error) {
+	if strings.TrimSpace(base) == "" {
+		return nil, fmt.Errorf("请先填写 Base URL")
+	}
+	if strings.TrimSpace(key) == "" {
+		return nil, fmt.Errorf("请先填写 API Key")
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, modelsEndpoint(base), nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+key)
+	req.Header.Set("Accept", "application/json")
+	res, err := modelClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("请求模型列表失败: %v", err)
+	}
+	defer res.Body.Close()
+	raw, _ := io.ReadAll(io.LimitReader(res.Body, 1<<20))
+	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		return nil, fmt.Errorf("模型列表返回 HTTP %d: %s", res.StatusCode, snippet(raw))
+	}
+	var out struct {
+		Data []struct {
+			ID   string `json:"id"`
+			Name string `json:"name"`
+		} `json:"data"`
+		Models []struct {
+			ID   string `json:"id"`
+			Name string `json:"name"`
+		} `json:"models"`
+	}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return nil, fmt.Errorf("无法解析模型列表: %v", err)
+	}
+	seen := map[string]bool{}
+	list := make([]string, 0, len(out.Data)+len(out.Models))
+	add := func(v string) {
+		v = strings.TrimSpace(v)
+		if v != "" && !seen[v] {
+			seen[v] = true
+			list = append(list, v)
+		}
+	}
+	for _, m := range out.Data {
+		if m.ID != "" {
+			add(m.ID)
+		} else {
+			add(m.Name)
+		}
+	}
+	for _, m := range out.Models {
+		if m.ID != "" {
+			add(m.ID)
+		} else {
+			add(m.Name)
+		}
+	}
+	if len(list) == 0 {
+		return nil, fmt.Errorf("接口未返回模型列表")
+	}
+	sort.Strings(list)
+	return list, nil
 }
 
 func snippet(b []byte) string {

@@ -35,6 +35,31 @@ func (s *Server) handleNotifyTest(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
+func (s *Server) handleAIModels(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		BaseURL string `json:"base_url"`
+		APIKey  string `json:"api_key"`
+	}
+	_ = readJSON(r, &req)
+	set := s.store.Settings()
+	base := strings.TrimSpace(req.BaseURL)
+	if base == "" {
+		base = set.AIBase
+	}
+	key := strings.TrimSpace(req.APIKey)
+	if key == "" {
+		key = set.AIKey
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 25*time.Second)
+	defer cancel()
+	models, err := ai.Models(ctx, base, key)
+	if err != nil {
+		writeErr(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"models": models})
+}
+
 type aiChatReq struct {
 	NodeID   string       `json:"node_id"`
 	Messages []ai.Message `json:"messages"`

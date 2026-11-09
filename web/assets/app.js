@@ -71,6 +71,11 @@ const ICON_PATHS = {
   wall: '<rect x="2.5" y="4" width="19" height="12.5" rx="2"/><path d="M8 20h8"/><path d="M12 16.5V20"/>',
   expand: '<path d="M8 3H3v5"/><path d="M16 3h5v5"/><path d="M16 21h5v-5"/><path d="M8 21H3v-5"/>',
   spark: '<path d="M12 3l1.8 4.9L19 10l-5.2 2.1L12 17l-1.8-4.9L5 10l5.2-2.1L12 3Z"/><path d="M18.5 15l.8 2.2L21.5 18l-2.2.8-.8 2.2-.8-2.2L15.5 18l2.2-.8.8-2.2Z"/>',
+  bell: '<path d="M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/>',
+  key: '<circle cx="7.5" cy="15.5" r="4.5"/><path d="m11 12 9.5-9.5"/><path d="m16 7 2.5 2.5"/><path d="m19 4 2 2"/>',
+  server: '<rect x="3" y="4" width="18" height="7" rx="2"/><rect x="3" y="13" width="18" height="7" rx="2"/><path d="M7 7.5h.01M7 16.5h.01"/>',
+  list: '<path d="M8 6h13M8 12h13M8 18h13"/><path d="M3.5 6h.01M3.5 12h.01M3.5 18h.01"/>',
+  info: '<circle cx="12" cy="12" r="9"/><path d="M12 11v5"/><path d="M12 8h.01"/>',
   winMin: '<path d="M5 12h14"/>',
   winMax: '<rect x="6" y="6" width="12" height="12" rx="1"/>',
   winRestore: '<rect x="8.5" y="8.5" width="10" height="10" rx="1"/><path d="M8.5 16h-2a1 1 0 0 1-1-1V5.5a1 1 0 0 1 1-1H16a1 1 0 0 1 1 1v2"/>',
@@ -2181,6 +2186,14 @@ function settingsPayload(extra) {
   return Object.assign(payload, extra || {});
 }
 
+async function busyBtn(btn, fn, text) {
+  if (!btn || btn.disabled) return;
+  const old = btn.textContent;
+  btn.disabled = true;
+  if (text) btn.textContent = text;
+  try { await fn(); } finally { btn.disabled = false; btn.textContent = old; }
+}
+
 async function saveSettings(payload, okText) {
   if (![payload.cpu_alert, payload.mem_alert, payload.disk_alert].every(v => v >= 1 && v <= 100)) {
     toast('阈值需在 1-100 之间', 'error');
@@ -2205,6 +2218,22 @@ async function saveSettings(payload, okText) {
   }
 }
 
+function settingHead(icon, title, sub) {
+  return `<div class="card-head"><span class="card-ico">${ico(icon)}</span><div class="card-title"><h2>${title}</h2><p class="sub">${sub}</p></div></div>`;
+}
+
+function pickModel(models) {
+  const prefs = ['gpt-4o-mini', 'gpt-4.1-mini', 'gpt-4o', 'deepseek-chat', 'qwen-plus'];
+  for (const p of prefs) {
+    const hit = models.find(m => m === p || m.endsWith('/' + p));
+    if (hit) return hit;
+  }
+  const mini = models.find(m => /mini/i.test(m) && !/embed|tts|whisper|image|dall|audio/i.test(m));
+  if (mini) return mini;
+  const chat = models.find(m => /chat/i.test(m) && !/embed|tts|whisper|image|dall|audio/i.test(m));
+  return chat || models[0] || '';
+}
+
 function renderSettings() {
   const page = $('#page');
   const hour = Number(state.settings.daily_hour);
@@ -2214,11 +2243,16 @@ function renderSettings() {
   page.innerHTML = `
     <section class="page-head">
       <div><h1>设置</h1><p class="page-sub">告警推送、AI、账号与节点管理</p></div>
+      <div class="head-actions">
+        <button class="btn sm ghost" data-jump="setNotify">通知</button>
+        <button class="btn sm ghost" data-jump="setAI">AI</button>
+        <button class="btn sm ghost" data-jump="setNodes">节点</button>
+        <button class="btn sm ghost" data-jump="setAudit">日志</button>
+      </div>
     </section>
     <div class="settings-grid">
-      <div class="card settings-card">
-        <h2>告警阈值</h2>
-        <p class="sub">超过阈值时节点卡片高亮，并可通过 Webhook 推送</p>
+      <div class="card settings-card" id="setThresholds">
+        ${settingHead('activity', '告警阈值', '超过阈值时节点卡片高亮，并可通过 Webhook 推送')}
         <div class="form-grid">
           <div class="field"><label>CPU %</label><input type="number" id="thCpu" min="1" max="100" value="${Number(state.settings.cpu_alert) || 90}"></div>
           <div class="field"><label>内存 %</label><input type="number" id="thMem" min="1" max="100" value="${Number(state.settings.mem_alert) || 90}"></div>
@@ -2226,13 +2260,12 @@ function renderSettings() {
         </div>
         <button class="btn" id="saveThresholds">保存阈值</button>
       </div>
-      <div class="card settings-card">
-        <h2>通知推送</h2>
-        <p class="sub">支持企业微信、钉钉、飞书、Bark、Server酱、PushPlus、ntfy、Gotify、Telegram、Slack、Discord 与自定义 Webhook，阈值告警只推一次、恢复时再通知</p>
+      <div class="card settings-card" id="setNotify">
+        ${settingHead('bell', '通知推送', '支持企业微信、钉钉、飞书、Bark、Server酱、PushPlus、ntfy、Gotify、Telegram、Slack、Discord 与自定义 Webhook，阈值告警只推一次、恢复时再通知')}
         <div class="form-grid">
           <div class="field full">
             <label>Webhook 地址</label>
-            <input id="webhookUrl" autocomplete="off" placeholder="${state.hasWebhook ? '已配置，留空保持不变' : 'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=...'}">
+            <input type="text" id="webhookUrl" autocomplete="off" placeholder="${state.hasWebhook ? '已配置，留空保持不变' : 'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=...'}">
             <div class="hint">企业微信 / 钉钉 / 飞书 / Slack / Discord 粘贴机器人 Webhook；手机推送：Bark 填 https://api.day.app/设备Key，Server酱 填 https://sctapi.ftqq.com/SENDKEY.send，PushPlus 填 https://www.pushplus.plus/send?token=TOKEN，ntfy 填 https://ntfy.sh/主题，Gotify 填 https://你的域名/message?token=TOKEN，Telegram 填 https://api.telegram.org/botTOKEN/sendMessage?chat_id=ID</div>
           </div>
           <div class="field"><label>每日早报</label><label class="check"><input type="checkbox" id="dailyOn" ${state.settings.daily_report ? 'checked' : ''}>每天推送节点运行概况</label></div>
@@ -2244,19 +2277,24 @@ function renderSettings() {
           ${state.hasWebhook ? '<button class="btn sm ghost" id="clearWebhook">清除 Webhook</button>' : ''}
         </div>
       </div>
-      <div class="card settings-card">
-        <h2>AI 运维助手</h2>
-        <p class="sub">OpenAI 兼容接口，Base URL 填到 /v1 为止；Key 只保存在本机配置中</p>
+      <div class="card settings-card" id="setAI">
+        ${settingHead('spark', 'AI 运维助手', 'OpenAI 兼容接口，Base URL 填到 /v1 为止；Key 只保存在本机配置中')}
         <div class="form-grid">
-          <div class="field full"><label>Base URL</label><input id="aiBase" autocomplete="off" value="${esc(state.settings.ai_base || '')}" placeholder="https://api.example.com/v1"></div>
-          <div class="field"><label>模型</label><input id="aiModel" autocomplete="off" value="${esc(state.settings.ai_model || '')}" placeholder="gpt-4o-mini"></div>
+          <div class="field full"><label>Base URL</label><input type="text" id="aiBase" autocomplete="off" value="${esc(state.settings.ai_base || '')}" placeholder="https://api.example.com/v1"></div>
+          <div class="field">
+            <label>模型</label>
+            <div class="model-row">
+              <input type="text" id="aiModel" list="aiModelList" autocomplete="off" value="${esc(state.settings.ai_model || '')}" placeholder="gpt-4o-mini">
+              <button class="btn sm ghost" id="aiDetect" type="button" title="从 Base URL 拉取可用模型列表">自动检测</button>
+            </div>
+            <datalist id="aiModelList"></datalist>
+          </div>
           <div class="field"><label>API Key</label><input type="password" id="aiKey" autocomplete="new-password" placeholder="${state.hasAIKey ? '已配置，留空保持不变' : 'sk-...'}"></div>
         </div>
         <button class="btn" id="saveAI">保存 AI 设置</button>
       </div>
-      <div class="card settings-card">
-        <h2>修改密码</h2>
-        <p class="sub">${state.desktop ? '桌面版已自动登录；设置密码后也可在本机浏览器中登录' : '密码用于登录面板，不会修改服务器 SSH 密码'}</p>
+      <div class="card settings-card" id="setPwd">
+        ${settingHead('key', '修改密码', state.desktop ? '桌面版已自动登录；设置密码后也可在本机浏览器中登录' : '密码用于登录面板，不会修改服务器 SSH 密码')}
         <div class="form-grid">
           ${state.desktop ? '' : '<div class="field full"><label>当前密码</label><input type="password" id="pwdOld" autocomplete="current-password"></div>'}
           <div class="field"><label>新密码</label><input type="password" id="pwdNew" autocomplete="new-password"></div>
@@ -2264,21 +2302,18 @@ function renderSettings() {
         </div>
         <button class="btn" id="savePassword">更新密码</button>
       </div>
-      <div class="card settings-card full">
-        <h2>节点管理</h2>
-        <p class="sub">通过 SSH 纳管服务器，无需在目标机器安装 Agent</p>
+      <div class="card settings-card full" id="setNodes">
+        ${settingHead('server', '节点管理', '通过 SSH 纳管服务器，无需在目标机器安装 Agent')}
         <div class="node-list" id="nodeList"></div>
         <button class="btn primary" id="addNodeBtn">添加节点</button>
       </div>
-      <div class="card settings-card full">
-        <h2>操作日志</h2>
-        <p class="sub">最近 200 条关键操作记录，保存在 data/audit.log</p>
+      <div class="card settings-card full" id="setAudit">
+        ${settingHead('list', '操作日志', '最近 200 条关键操作记录，保存在 data/audit.log')}
         <div class="audit-list" id="auditList"><div class="muted">加载中…</div></div>
         <button class="btn sm ghost" id="auditRefresh">刷新日志</button>
       </div>
       <div class="card settings-card full">
-        <h2>关于</h2>
-        <p class="sub">KayPanel ${esc(state.version || 'dev')} · 单二进制多机面板 · SSH 架构，无 Agent</p>
+        ${settingHead('info', '关于', `KayPanel ${esc(state.version || 'dev')} · 单二进制多机面板 · SSH 架构，无 Agent`)}
         <div class="info-list">
           <div class="info-row"><span>当前节点</span><span>${state.nodes.length} 台</span></div>
           <div class="info-row"><span>数据目录</span><span>${state.desktop ? 'AppData\\Roaming\\KayPanel' : 'data/'}（config.yaml、audit.log、history.json）</span></div>
@@ -2289,10 +2324,35 @@ function renderSettings() {
     </div>`;
 
   renderNodeList();
+  $$('[data-jump]').forEach(b => b.addEventListener('click', () => {
+    const el = document.getElementById(b.dataset.jump);
+    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }));
   $('#addNodeBtn').addEventListener('click', () => openNodeForm(null));
-  $('#saveThresholds').addEventListener('click', () => saveSettings(settingsPayload(), '阈值已保存'));
-  $('#saveNotify').addEventListener('click', () => saveSettings(settingsPayload(), '通知设置已保存'));
-  $('#saveAI').addEventListener('click', () => saveSettings(settingsPayload(), 'AI 设置已保存'));
+  $('#saveThresholds').addEventListener('click', e => busyBtn(e.currentTarget, () => saveSettings(settingsPayload(), '阈值已保存'), '保存中…'));
+  $('#saveNotify').addEventListener('click', e => busyBtn(e.currentTarget, () => saveSettings(settingsPayload(), '通知设置已保存'), '保存中…'));
+  $('#saveAI').addEventListener('click', e => busyBtn(e.currentTarget, () => saveSettings(settingsPayload(), 'AI 设置已保存'), '保存中…'));
+  $('#aiDetect').addEventListener('click', async () => {
+    const btn = $('#aiDetect');
+    const base = $('#aiBase').value.trim();
+    if (!base) { toast('请先填写 Base URL', 'error'); return; }
+    btn.disabled = true;
+    btn.textContent = '检测中…';
+    try {
+      const key = $('#aiKey').value.trim();
+      const d = await api('/api/ai/models', { method: 'POST', body: JSON.stringify({ base_url: base, api_key: key }) });
+      const models = (d && d.models) || [];
+      $('#aiModelList').innerHTML = models.map(m => `<option value="${esc(m)}"></option>`).join('');
+      const cur = $('#aiModel').value.trim();
+      const pick = !cur || !models.includes(cur) ? pickModel(models) : '';
+      if (pick) $('#aiModel').value = pick;
+      toast(`检测到 ${models.length} 个模型${pick ? '，已填入 ' + pick : ''}`, 'success', 5000);
+    } catch (e) {
+      toast(e.message, 'error', 7000);
+    }
+    btn.disabled = false;
+    btn.textContent = '自动检测';
+  });
   $('#testNotify').addEventListener('click', async () => {
     const btn = $('#testNotify');
     btn.disabled = true;
@@ -2310,7 +2370,7 @@ function renderSettings() {
     if (!await confirmDialog('清除 Webhook', '清除后阈值告警与每日早报将停止推送，确定继续？', '清除', true)) return;
     if (await saveSettings(settingsPayload({ clear_webhook: true }), 'Webhook 已清除')) renderSettings();
   });
-  $('#savePassword').addEventListener('click', async () => {
+  $('#savePassword').addEventListener('click', e => busyBtn(e.currentTarget, async () => {
     const oldPwd = $('#pwdOld') ? $('#pwdOld').value : '', newPwd = $('#pwdNew').value, newPwd2 = $('#pwdNew2').value;
     if (newPwd.length < 8) { toast('新密码至少 8 位', 'error'); return; }
     if (newPwd !== newPwd2) { toast('两次输入的新密码不一致', 'error'); return; }
@@ -2319,8 +2379,8 @@ function renderSettings() {
       toast('密码已更新', 'success');
       if ($('#pwdOld')) $('#pwdOld').value = '';
       $('#pwdNew').value = $('#pwdNew2').value = '';
-    } catch (e) { toast(e.message, 'error'); }
-  });
+    } catch (err) { toast(err.message, 'error'); }
+  }, '更新中…'));
   $('#auditRefresh').addEventListener('click', loadAudit);
   loadAudit();
 }

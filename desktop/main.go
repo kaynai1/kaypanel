@@ -25,11 +25,14 @@ var version = "dev"
 
 var (
 	user32dll                    = windows.NewLazySystemDLL("user32.dll")
+	kernel32dll                  = windows.NewLazySystemDLL("kernel32.dll")
+	shell32dll                   = windows.NewLazySystemDLL("shell32.dll")
 	procGetWindowLongPtr         = user32dll.NewProc("GetWindowLongPtrW")
 	procSetWindowLongPtr         = user32dll.NewProc("SetWindowLongPtrW")
 	procSetWindowPos             = user32dll.NewProc("SetWindowPos")
 	procShowWindow               = user32dll.NewProc("ShowWindow")
 	procIsZoomed                 = user32dll.NewProc("IsZoomed")
+	procIsIconic                 = user32dll.NewProc("IsIconic")
 	procReleaseCapture           = user32dll.NewProc("ReleaseCapture")
 	procGetCursorPos             = user32dll.NewProc("GetCursorPos")
 	procSendMessage              = user32dll.NewProc("SendMessageW")
@@ -40,6 +43,21 @@ var (
 	procGetMonitorInfo           = user32dll.NewProc("GetMonitorInfoW")
 	procGetDpiForWindow          = user32dll.NewProc("GetDpiForWindow")
 	procAdjustWindowRectExForDpi = user32dll.NewProc("AdjustWindowRectExForDpi")
+	procSetForegroundWindow      = user32dll.NewProc("SetForegroundWindow")
+	procLoadImageW               = user32dll.NewProc("LoadImageW")
+	procGetSystemMetrics         = user32dll.NewProc("GetSystemMetrics")
+	procCreatePopupMenu          = user32dll.NewProc("CreatePopupMenu")
+	procAppendMenuW              = user32dll.NewProc("AppendMenuW")
+	procTrackPopupMenu           = user32dll.NewProc("TrackPopupMenu")
+	procSetMenuDefaultItem       = user32dll.NewProc("SetMenuDefaultItem")
+	procDestroyMenu              = user32dll.NewProc("DestroyMenu")
+	procShellNotifyIcon          = shell32dll.NewProc("Shell_NotifyIconW")
+	procGetModuleHandle          = kernel32dll.NewProc("GetModuleHandleW")
+	procCreateEventW             = kernel32dll.NewProc("CreateEventW")
+	procOpenEventW               = kernel32dll.NewProc("OpenEventW")
+	procSetEvent                 = kernel32dll.NewProc("SetEvent")
+	procCloseHandle              = kernel32dll.NewProc("CloseHandle")
+	procWaitForSingleObject      = kernel32dll.NewProc("WaitForSingleObject")
 )
 
 const (
@@ -59,8 +77,37 @@ const (
 	wmSize          = 0x0005
 	wmNCLButtonDown = 0x00A1
 	wmGetMinMaxInfo = 0x0024
+	wmNull          = 0x0000
 	htCaption       = 2
 	monitorNearest  = 2
+	swHide          = 0
+	swShow          = 5
+
+	trayMsg       = 0x8000 + 1
+	showWindowMsg = 0x8000 + 2
+	wmLButtonUp   = 0x0202
+	wmLButtonDbl  = 0x0203
+	wmRButtonUp   = 0x0205
+
+	trayIconID  = 1
+	menuShow    = 1
+	menuExit    = 2
+	nimAdd      = 0x00000000
+	nimModify   = 0x00000001
+	nimDelete   = 0x00000002
+	nifMessage  = 0x00000001
+	nifIcon     = 0x00000002
+	nifTip      = 0x00000004
+	nifInfo     = 0x00000010
+	niiInfo     = 0x00000001
+	imageIcon   = 1
+	lrShared    = 0x00008000
+	smCxSmIcon  = 49
+	smCySmIcon  = 50
+	tpmRightBtn = 0x0002
+	tpmReturn   = 0x0100
+	mfString    = 0x00000000
+	mfSeparator = 0x00000800
 )
 
 type point struct {
@@ -84,6 +131,24 @@ type monitorInfo struct {
 	RcMonitor winRect
 	RcWork    winRect
 	DwFlags   uint32
+}
+
+type notifyIconData struct {
+	CbSize           uint32
+	HWnd             uintptr
+	UID              uint32
+	UFlags           uint32
+	UCallbackMessage uint32
+	HIcon            uintptr
+	SzTip            [128]uint16
+	DwState          uint32
+	DwStateMask      uint32
+	SzInfo           [256]uint16
+	UVersion         uint32
+	SzInfoTitle      [64]uint16
+	DwInfoFlags      uint32
+	GuidItem         windows.GUID
+	HBalloonIcon     uintptr
 }
 
 func init() {
@@ -113,10 +178,16 @@ func main() {
 
 	release, ok := singleInstance()
 	if !ok {
-		messageBox("KayPanel 已在运行", "KayPanel 已经打开，请在任务栏中切换窗口。")
+		if !signalExisting() {
+			messageBox("KayPanel 已在运行", "KayPanel 已经打开，请在任务栏中切换窗口。")
+		}
 		return
 	}
 	defer release()
+	createShowEvent()
+	if showEvent != 0 {
+		defer procCloseHandle.Call(showEvent)
+	}
 
 	inst, err := app.Start(app.Options{
 		ConfigPath: filepath.Join(dataDir, "config.yaml"),
@@ -158,8 +229,12 @@ func main() {
 	}
 	defer w.Destroy()
 	makeFrameless(w)
-	fixMaximize(w)
+	subclassWindow(w)
 	bindWindow(w)
+	hwnd := uintptr(w.Window())
+	addTray(hwnd)
+	defer removeTray()
+	watchShowEvent(hwnd)
 	w.Navigate(authURL)
 	w.Run()
 }
@@ -181,18 +256,32 @@ func makeFrameless(w webview2.WebView) {
 	procSendMessage.Call(hwnd, wmSize, 0, 0)
 }
 
-var prevWndProc uintptr
+var (
+	prevWndProc  uintptr
+	trayAdded    bool
+	balloonShown bool
+	trayNid      notifyIconData
+	showEvent    uintptr
+)
 
 // Maximizing a caption-less thick-frame window covers the taskbar, so clamp
-// the maximized geometry to the monitor work area.
-func fixMaximize(w webview2.WebView) {
+// the maximized geometry to the monitor work area. The same subclass carries
+// tray callbacks, close-to-tray and the single-instance wake-up message.
+func subclassWindow(w webview2.WebView) {
 	hwnd := uintptr(w.Window())
 	if hwnd == 0 {
 		return
 	}
 	cb := syscall.NewCallback(func(h, msg, wp, lp uintptr) uintptr {
-		if msg == wmGetMinMaxInfo {
+		switch msg {
+		case wmGetMinMaxInfo:
 			clampMaximize(h, lp)
+		case trayMsg:
+			handleTray(h, lp)
+			return 0
+		case showWindowMsg:
+			showMain(h)
+			return 0
 		}
 		if prevWndProc == 0 {
 			r, _, _ := procDefWindowProc.Call(h, msg, wp, lp)
@@ -202,6 +291,135 @@ func fixMaximize(w webview2.WebView) {
 		return r
 	})
 	prevWndProc, _, _ = procSetWindowLongPtr.Call(hwnd, ptrIndex(gwlWndProc), cb)
+}
+
+func addTray(hwnd uintptr) {
+	if hwnd == 0 {
+		return
+	}
+	hinst, _, _ := procGetModuleHandle.Call(0)
+	cx, _, _ := procGetSystemMetrics.Call(smCxSmIcon)
+	cy, _, _ := procGetSystemMetrics.Call(smCySmIcon)
+	hIcon, _, _ := procLoadImageW.Call(hinst, trayIconID, imageIcon, cx, cy, lrShared)
+	if hIcon == 0 {
+		hIcon, _, _ = procLoadImageW.Call(0, 32512, imageIcon, cx, cy, lrShared)
+	}
+	trayNid = notifyIconData{
+		CbSize:           uint32(unsafe.Sizeof(notifyIconData{})),
+		HWnd:             hwnd,
+		UID:              trayIconID,
+		UFlags:           nifMessage | nifIcon | nifTip,
+		UCallbackMessage: trayMsg,
+		HIcon:            hIcon,
+	}
+	copy(trayNid.SzTip[:], windows.StringToUTF16("KayPanel "+version+" · 服务器管理"))
+	ok, _, _ := procShellNotifyIcon.Call(nimAdd, uintptr(unsafe.Pointer(&trayNid)))
+	trayAdded = ok != 0
+}
+
+func removeTray() {
+	if !trayAdded {
+		return
+	}
+	procShellNotifyIcon.Call(nimDelete, uintptr(unsafe.Pointer(&trayNid)))
+	trayAdded = false
+}
+
+func notifyHidden() {
+	if balloonShown || !trayAdded {
+		return
+	}
+	balloonShown = true
+	nid := trayNid
+	nid.UFlags = nifInfo
+	nid.UVersion = 4000
+	nid.DwInfoFlags = niiInfo
+	copy(nid.SzInfoTitle[:], windows.StringToUTF16("KayPanel 仍在运行"))
+	copy(nid.SzInfo[:], windows.StringToUTF16("窗口已收起到系统托盘，单击托盘图标可重新打开。"))
+	procShellNotifyIcon.Call(nimModify, uintptr(unsafe.Pointer(&nid)))
+}
+
+func handleTray(hwnd, lp uintptr) {
+	switch uint32(lp) & 0xffff {
+	case wmLButtonUp, wmLButtonDbl:
+		showMain(hwnd)
+	case wmRButtonUp:
+		showTrayMenu(hwnd)
+	}
+}
+
+func showTrayMenu(hwnd uintptr) {
+	menu, _, _ := procCreatePopupMenu.Call()
+	if menu == 0 {
+		return
+	}
+	openText, _ := windows.UTF16PtrFromString("打开 KayPanel")
+	exitText, _ := windows.UTF16PtrFromString("退出")
+	procAppendMenuW.Call(menu, mfString, menuShow, uintptr(unsafe.Pointer(openText)))
+	procSetMenuDefaultItem.Call(menu, menuShow, 0)
+	procAppendMenuW.Call(menu, mfSeparator, 0, 0)
+	procAppendMenuW.Call(menu, mfString, menuExit, uintptr(unsafe.Pointer(exitText)))
+	procSetForegroundWindow.Call(hwnd)
+	var pt struct{ X, Y int32 }
+	procGetCursorPos.Call(uintptr(unsafe.Pointer(&pt)))
+	cmd, _, _ := procTrackPopupMenu.Call(menu, tpmReturn|tpmRightBtn, uintptr(pt.X), uintptr(pt.Y), 0, hwnd, 0)
+	procDestroyMenu.Call(menu)
+	procPostMessage.Call(hwnd, wmNull, 0, 0)
+	switch cmd {
+	case menuShow:
+		showMain(hwnd)
+	case menuExit:
+		procPostMessage.Call(hwnd, wmClose, 0, 0)
+	}
+}
+
+func showMain(hwnd uintptr) {
+	if hwnd == 0 {
+		return
+	}
+	if z, _, _ := procIsIconic.Call(hwnd); z != 0 {
+		procShowWindow.Call(hwnd, swRestore)
+	} else {
+		procShowWindow.Call(hwnd, swShow)
+	}
+	procSetForegroundWindow.Call(hwnd)
+}
+
+func createShowEvent() {
+	name, err := windows.UTF16PtrFromString(`Local\KayPanelShow`)
+	if err != nil {
+		return
+	}
+	h, _, _ := procCreateEventW.Call(0, 0, 0, uintptr(unsafe.Pointer(name)))
+	showEvent = h
+}
+
+func signalExisting() bool {
+	name, err := windows.UTF16PtrFromString(`Local\KayPanelShow`)
+	if err != nil {
+		return false
+	}
+	h, _, _ := procOpenEventW.Call(0x0002, 0, uintptr(unsafe.Pointer(name)))
+	if h == 0 {
+		return false
+	}
+	procSetEvent.Call(h)
+	procCloseHandle.Call(h)
+	return true
+}
+
+func watchShowEvent(hwnd uintptr) {
+	if showEvent == 0 {
+		return
+	}
+	go func() {
+		for {
+			if r, _, _ := procWaitForSingleObject.Call(showEvent, 0xFFFFFFFF); r != 0 {
+				return
+			}
+			procPostMessage.Call(hwnd, showWindowMsg, 0, 0)
+		}
+	}()
 }
 
 func clampMaximize(hwnd, lp uintptr) {
@@ -249,7 +467,12 @@ func bindWindow(w webview2.WebView) {
 			procShowWindow.Call(hwnd, swMaximize)
 			return "max"
 		case "close":
-			procPostMessage.Call(hwnd, wmClose, 0, 0)
+			if trayAdded {
+				procShowWindow.Call(hwnd, swHide)
+				notifyHidden()
+			} else {
+				procPostMessage.Call(hwnd, wmClose, 0, 0)
+			}
 		}
 		return ""
 	})
