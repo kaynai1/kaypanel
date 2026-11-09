@@ -694,7 +694,8 @@ button { cursor: pointer; }
 .hook-help[open] summary { margin-bottom: 5px; }
 .settings-card h2 { font-size: 15.5px; margin: 0 0 4px; font-weight: 600; }
 .settings-card .sub { color: var(--muted); font-size: 13px; line-height: 1.6; margin: 0 0 14px; }
-.settings-card .btn { margin-top: 12px; }
+.settings-card > .btn { margin-top: 12px; }
+.settings-card .head-actions { margin-top: 12px; }
 .card-head { display: flex; align-items: flex-start; gap: 11px; margin-bottom: 14px; }
 .card-head .card-ico { width: 34px; height: 34px; border-radius: 10px; background: var(--accent-soft); color: var(--accent); display: inline-flex; align-items: center; justify-content: center; flex: none; }
 .card-head .card-ico svg { width: 17px; height: 17px; }
