@@ -55,7 +55,7 @@ func TestAddTagCap(t *testing.T) {
 }
 
 func TestPersonalityOffline(t *testing.T) {
-	p := personalityOf(node.View{Name: "测试机", Online: false}, nil, nil)
+	p := personalityOf(node.View{Online: false}, nil, nil)
 	if p.Title != "失联中" || p.Stable != 0 || p.StableText != "等待重连" {
 		t.Fatalf("unexpected offline personality: %+v", p)
 	}
@@ -65,7 +65,7 @@ func TestPersonalityOffline(t *testing.T) {
 }
 
 func TestPersonalitySFTPOnly(t *testing.T) {
-	p := personalityOf(node.View{Name: "小主机", Online: true, SFTPOnly: true}, nil, nil)
+	p := personalityOf(node.View{Online: true, SFTPOnly: true}, nil, nil)
 	if p.Title != "佛系主机" {
 		t.Fatalf("unexpected sftp title: %+v", p)
 	}
@@ -73,7 +73,6 @@ func TestPersonalitySFTPOnly(t *testing.T) {
 
 func TestPersonalityHighMemory(t *testing.T) {
 	v := node.View{
-		Name:   "吃内存",
 		Online: true,
 		Latest: metrics.Snapshot{MemUsed: 90, MemTotal: 100, DiskUsed: 10, DiskTotal: 100, Uptime: 3600},
 	}
@@ -98,7 +97,6 @@ func TestPersonalityHighMemory(t *testing.T) {
 
 func TestPersonalityLongUptime(t *testing.T) {
 	v := node.View{
-		Name:   "老兵",
 		Online: true,
 		Latest: metrics.Snapshot{CPU: 5, MemUsed: 30, MemTotal: 100, DiskUsed: 60, DiskTotal: 100, Uptime: 40 * 86400},
 	}
@@ -122,7 +120,7 @@ func TestPersonalityStabilityDeductions(t *testing.T) {
 		{Level: "warn", Title: "内存吃紧"},
 		{Level: "info", Title: "节点上线"},
 	}
-	v := node.View{Name: "多灾", Online: true, Latest: metrics.Snapshot{CPU: 5, MemUsed: 30, MemTotal: 100, DiskUsed: 60, DiskTotal: 100}}
+	v := node.View{Online: true, Latest: metrics.Snapshot{CPU: 5, MemUsed: 30, MemTotal: 100, DiskUsed: 60, DiskTotal: 100}}
 	p := personalityOf(v, nil, events)
 	if p.Offline != 1 {
 		t.Fatalf("offline count: %d", p.Offline)
@@ -145,7 +143,7 @@ func TestPersonalityNightOwl(t *testing.T) {
 		{Time: base + 10*3600, CPU: 5, MemUsed: 20, MemTotal: 100, DiskUsed: 10, DiskTotal: 100},
 		{Time: base + 11*3600, CPU: 5, MemUsed: 20, MemTotal: 100, DiskUsed: 10, DiskTotal: 100},
 	}
-	v := node.View{Name: "夜猫", Online: true, Latest: metrics.Snapshot{CPU: 30, MemUsed: 20, MemTotal: 100, DiskUsed: 10, DiskTotal: 100}}
+	v := node.View{Online: true, Latest: metrics.Snapshot{CPU: 30, MemUsed: 20, MemTotal: 100, DiskUsed: 10, DiskTotal: 100}}
 	p := personalityOf(v, night, nil)
 	found := false
 	for _, tag := range p.Tags {
