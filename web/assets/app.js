@@ -41,6 +41,9 @@ const state = {
   aiMessages: [],
   aiBusy: false,
   aiModels: [],
+  inspect: null,
+  inspectBusy: false,
+  inspectError: '',
   trendMetric: 'cpu',
   autoRefresh: prefOn('kp_auto'),
   procOn: prefOn('kp_proc'),
@@ -391,6 +394,7 @@ function closeNodeMenu() {
 }
 
 function refreshCurrentPage() {
+  if (state.subview && state.subview.type === 'inspect') { loadInspect(); return; }
   switch (state.page) {
     case 'overview': loadOverview(true); loadProcesses(); break;
     case 'containers': loadContainers(); break;
@@ -526,6 +530,7 @@ function renderPage() {
   if (sub && sub.type === 'stack-edit') return renderStackEditor(sub);
   if (sub && sub.type === 'file-edit') return renderFileEditor(sub);
   if (sub && sub.type === 'node-edit') return renderNodeForm(sub);
+  if (sub && sub.type === 'inspect') return renderInspect();
   switch (state.page) {
     case 'overview': return renderOverview();
     case 'containers': return renderContainers();
@@ -1033,6 +1038,7 @@ function drawOverview() {
     <section class="page-head">
       <div><h1>概览</h1><p class="page-sub">${todayCN()} · ${state.nodes.length ? `${online} / ${state.nodes.length} 台节点在线` : '尚未添加节点'}</p></div>
       <div class="head-actions">
+        <button class="btn sm" id="ovInspect">${ico('activity', 'ico')}一键巡检</button>
         <button class="btn sm" id="ovWall">${ico('wall', 'ico')}大屏</button>
         <button class="btn sm" id="ovRefresh">刷新</button>
         <button class="btn sm primary" id="ovAddNode">${ico('plus', 'ico')}添加节点</button>
@@ -1042,6 +1048,8 @@ function drawOverview() {
 
   const refresh = $('#ovRefresh');
   if (refresh) refresh.addEventListener('click', () => loadOverview(true));
+  const inspectBtn = $('#ovInspect');
+  if (inspectBtn) inspectBtn.addEventListener('click', openInspect);
   const wallBtn = $('#ovWall');
   if (wallBtn) wallBtn.addEventListener('click', () => navigate('wall'));
   const addNode = $('#ovAddNode');
@@ -2082,10 +2090,33 @@ function connectTerminal(n) {
 
 /* ---------- ai ---------- */
 
-function aiBubble(m) {
+function aiActionHTML(a, mi, ai) {
+  const actIcon = a.type && a.type.startsWith('disk') ? 'server' : 'container';
+  const btn = a.done
+    ? '<button class="btn sm ghost" type="button" disabled>已执行</button>'
+    : `<button class="btn sm ${a.danger ? 'danger' : 'primary'}" type="button" data-mi="${mi}" data-ai="${ai}">执行</button>`;
+  return `<div class="ai-act ${a.danger ? 'risk' : ''}">
+    <span class="ai-act-ic">${ico(actIcon)}</span>
+    <div class="ai-act-main">
+      <div class="ai-act-title"><b>${esc(a.label)}</b>${a.read_only ? '<span class="ai-act-ro">只读</span>' : '<span class="ai-act-risk">会改动服务器</span>'}</div>
+      <div class="ai-act-detail">${esc(a.detail)}${a.reason ? ' · ' + esc(a.reason) : ''}</div>
+      <code class="ai-act-cmd">${esc(a.command)}</code>
+    </div>
+    ${btn}
+  </div>`;
+}
+
+function aiBubble(m, idx) {
+  const acts = m.actions && m.actions.length
+    ? `<div class="ai-acts">${m.actions.map((a, i) => aiActionHTML(a, idx, i)).join('')}</div>`
+    : '';
+  const output = m.output ? `<pre class="ai-pre">${esc(m.output)}</pre>` : '';
   return `<div class="ai-msg ${m.role === 'user' ? 'user' : 'assistant'} ${m.error ? 'err' : ''}">
     <div class="ai-role">${m.role === 'user' ? '我' : 'AI'}</div>
-    <div class="ai-text">${esc(m.content)}</div>
+    <div class="ai-body">
+      <div class="ai-text">${esc(m.content)}${output}</div>
+      ${acts}
+    </div>
   </div>`;
 }
 
@@ -2095,11 +2126,11 @@ function aiChatHTML() {
     const samples = ['这台机器现在有什么异常？', 'CPU / 内存占用高，可能是什么原因？', '帮我看看哪些进程最吃资源？', '磁盘快满了，怎么安全清理？'];
     return `<div class="ai-empty">
       <div class="ai-empty-title">${n ? esc(n.name) + ' · 实时上下文已就绪' : '请选择一个节点'}</div>
-      <p>AI 会读取当前节点的指标、进程和容器列表用于分析，不会执行命令。</p>
+      <p>AI 会读取当前节点的指标、进程和容器列表用于分析，也可以提议重启容器、看日志、分析或清理磁盘；执行前都会弹窗确认。</p>
       <div class="ai-samples">${samples.map(q => `<button type="button" class="ai-sample" data-q="${esc(q)}">${esc(q)}</button>`).join('')}</div>
     </div>`;
   }
-  return state.aiMessages.map(aiBubble).join('') +
+  return state.aiMessages.map((m, i) => aiBubble(m, i)).join('') +
     (state.aiBusy ? `<div class="ai-msg assistant"><div class="ai-role">AI</div><div class="ai-text ai-thinking">思考中…</div></div>` : '');
 }
 
@@ -2123,7 +2154,7 @@ async function sendAI(text) {
   try {
     const history = state.aiMessages.filter(m => !m.error).slice(-12);
     const d = await api('/api/ai/chat', { method: 'POST', body: JSON.stringify({ node_id: n.id, messages: history }) });
-    state.aiMessages.push({ role: 'assistant', content: d.reply || '（空回复）' });
+    state.aiMessages.push({ role: 'assistant', content: d.reply || '（空回复）', actions: d.actions || [] });
   } catch (e) {
     state.aiMessages.push({ role: 'assistant', content: e.message, error: true });
   }
@@ -2131,6 +2162,30 @@ async function sendAI(text) {
   renderAIChat();
   if ($('#aiSend')) $('#aiSend').disabled = false;
   if ($('#aiInput')) $('#aiInput').focus();
+}
+
+async function runAIAction(btn, a) {
+  const n = currentNode();
+  if (!n) { toast('请先选择节点', 'error'); return; }
+  const desc = `${n.name} · ${a.detail}\n\n将要执行的命令：\n${a.command}\n\n` +
+    (a.read_only ? '该操作只读取信息，不会修改服务器。' : '该操作会改动服务器状态，请确认当前业务可以承受。');
+  if (!await confirmDialog(a.label, desc, a.danger ? '确认执行' : '执行', a.danger)) return;
+  btn.disabled = true;
+  btn.textContent = '执行中…';
+  try {
+    const d = await api('/api/ai/action', {
+      method: 'POST',
+      body: JSON.stringify({ node_id: n.id, type: a.type, target: a.target || '' }),
+    });
+    a.done = true;
+    state.aiMessages.push({ role: 'assistant', content: `${a.label}执行完成（${a.detail}）`, output: d.output || '（无输出）' });
+    toast(`${a.label}完成`);
+  } catch (e) {
+    a.done = true;
+    state.aiMessages.push({ role: 'assistant', content: `${a.label}执行失败：${e.message}`, error: true });
+    toast('执行失败', 'error');
+  }
+  renderAIChat();
 }
 
 function renderAI() {
@@ -2151,7 +2206,7 @@ function renderAI() {
         <textarea id="aiInput" rows="2" placeholder="例如：这台机器为什么变慢？需要注意什么？"></textarea>
         <button class="btn primary" id="aiSend" ${state.aiBusy ? 'disabled' : ''}>发送</button>
       </div>
-      <div class="ai-hint">AI 只读取指标、进程与容器信息用于分析，不会在服务器上执行任何命令。</div>
+      <div class="ai-hint">AI 可提议重启容器、查看日志、分析或清理磁盘；执行前都会弹窗确认，只放行面板内置的白名单命令。</div>
     </div>`;
   $('#aiClear').addEventListener('click', () => { state.aiMessages = []; renderAIChat(); });
   $('#aiSettings').addEventListener('click', () => navigate('settings'));
@@ -2161,9 +2216,375 @@ function renderAI() {
   });
   $('#aiChat').addEventListener('click', e => {
     const b = e.target.closest('[data-q]');
-    if (b) sendAI(b.dataset.q);
+    if (b) { sendAI(b.dataset.q); return; }
+    const act = e.target.closest('[data-mi][data-ai]');
+    if (!act) return;
+    const msg = state.aiMessages[Number(act.dataset.mi)];
+    const a = msg && msg.actions && msg.actions[Number(act.dataset.ai)];
+    if (a) runAIAction(act, a);
   });
   renderAIChat();
+}
+
+/* ---------- inspect ---------- */
+
+const INSPECT_TONES = { '优秀': '#16a34a', '良好': '#2563eb', '一般': '#d97706', '需关注': '#dc2626', '在线': '#0891b2', '离线': '#64748b' };
+const INSPECT_CLASSES = { '优秀': 'ok', '良好': 'good', '一般': 'fair', '需关注': 'bad', '在线': 'info', '离线': 'off' };
+
+function inspectTone(grade) { return INSPECT_TONES[grade] || '#64748b'; }
+function inspectClass(grade) { return INSPECT_CLASSES[grade] || 'off'; }
+
+function openInspect() {
+  if (state.subview && state.subview.type === 'inspect') return;
+  state.subview = { type: 'inspect' };
+  state.inspect = null;
+  state.inspectError = '';
+  state.inspectBusy = false;
+  renderPage();
+  loadInspect();
+}
+
+async function loadInspect() {
+  if (state.inspectBusy) return;
+  state.inspectBusy = true;
+  if (state.subview && state.subview.type === 'inspect') renderPage();
+  try {
+    state.inspect = await api('/api/inspect');
+    state.inspectError = '';
+  } catch (e) {
+    state.inspectError = e.message;
+    toast(e.message, 'error');
+  }
+  state.inspectBusy = false;
+  if (state.subview && state.subview.type === 'inspect') renderPage();
+}
+
+function inspectNodeHTML(n) {
+  const cls = inspectClass(n.grade);
+  const metric = (label, v) => {
+    const p = Math.max(0, Math.min(100, Number(v) || 0));
+    const bar = p >= 90 ? 'bad' : p >= 80 ? 'fair' : p >= 65 ? 'mid' : 'ok';
+    return `<div class="insp-metric">
+      <div class="insp-metric-head"><span>${label}</span><b>${p.toFixed(1)}%</b></div>
+      <div class="insp-metric-bar"><i class="${bar}" style="width:${p.toFixed(1)}%"></i></div>
+    </div>`;
+  };
+  let body;
+  if (!n.online) {
+    body = `<div class="insp-offline">节点离线，无法读取系统指标</div>`;
+  } else if (n.sftp_only) {
+    body = `<div class="insp-offline info">虚拟主机 · 仅 SFTP 文件管理，不采集系统指标</div>`;
+  } else {
+    body = `<div class="insp-metrics">${metric('CPU', n.cpu)}${metric('内存', n.mem_pct)}${metric('磁盘', n.disk_pct)}</div>
+      <div class="insp-meta">
+        <span>负载 <b>${(Number(n.load1) || 0).toFixed(2)}</b></span>
+        <span>运行 <b>${fmtUptime(n.uptime)}</b></span>
+        <span>Docker <b>${n.docker_total > 0 ? `${n.docker_running}/${n.docker_total}` : '未安装'}</b></span>
+        ${n.temp > 0 ? `<span>温度 <b>${n.temp.toFixed(0)}°C</b></span>` : ''}
+      </div>`;
+  }
+  const issues = n.issues && n.issues.length
+    ? n.issues.map(x => `<span>${esc(x)}</span>`).join('')
+    : '<span class="ok">未发现明显问题</span>';
+  return `<div class="card insp-node tone-${cls}">
+    <div class="insp-node-head">
+      <span class="avatar" style="background:${avatarColor(n.id)}">${esc(initialOf(n.name))}</span>
+      <div class="insp-node-main">
+        <b>${esc(n.name)}${n.sftp_only ? '<span class="tag-soft">仅文件</span>' : ''}</b>
+        <span>${esc(n.user)}@${esc(n.addr)}${n.os ? ' · ' + esc(n.os) : ''}</span>
+      </div>
+      <div class="insp-score"><b>${n.score}</b><span>${esc(n.grade)}</span></div>
+    </div>
+    ${body}
+    <div class="insp-issues ${n.issues && n.issues.length ? 'has' : ''}">${issues}</div>
+  </div>`;
+}
+
+function inspectHTML(d) {
+  const counts = d.counts || {};
+  const chip = g => `<span class="insp-chip tone-${inspectClass(g)}"><i></i>${g} ${counts[g] || 0}</span>`;
+  return `<div class="card insp-hero">
+      <div class="insp-ring" style="--pct:${d.average};--tone:${inspectTone(d.grade)}">
+        <div class="insp-ring-in"><b>${d.average}</b><span>综合评分</span></div>
+      </div>
+      <div class="insp-hero-main">
+        <div class="insp-hero-title">整体状态 <span class="insp-pill tone-${inspectClass(d.grade)}">${esc(d.grade)}</span></div>
+        <p>共 ${d.total} 台节点，在线 ${d.online} 台。评分来自 CPU、内存、磁盘、负载、温度、容器运行状态与近期峰值，满分 100。</p>
+        <div class="insp-chips">
+          <span class="insp-chip all"><i></i>全部 ${d.total}</span>
+          ${chip('优秀')}${chip('良好')}${chip('一般')}${chip('需关注')}${counts['在线'] ? chip('在线') : ''}${counts['离线'] ? chip('离线') : ''}
+        </div>
+      </div>
+      <div class="insp-time">巡检快照<br><b>${fmtTime(d.time)}</b></div>
+    </div>
+    <div class="insp-grid">${d.nodes.map(inspectNodeHTML).join('')}</div>
+    <div class="insp-foot">长图会带上巡检时间与每台节点的评分明细，可直接发到群里。</div>`;
+}
+
+function renderInspect() {
+  const page = $('#page');
+  if (!page) return;
+  const d = state.inspect;
+  const canExport = !!d && !state.inspectBusy;
+  page.innerHTML = `
+    <section class="page-head">
+      <div><h1>一键巡检报告</h1><p class="page-sub">${d ? `${fmtTime(d.time)} · ${d.total} 台节点` : '正在读取所有节点指标…'}</p></div>
+      <div class="head-actions">
+        <button class="btn sm ghost" id="inspBack">返回概览</button>
+        <button class="btn sm" id="inspRefresh" ${state.inspectBusy ? 'disabled' : ''}>${state.inspectBusy ? '巡检中…' : '重新巡检'}</button>
+        <button class="btn sm" id="inspCopy" ${canExport ? '' : 'disabled'}>复制图片</button>
+        <button class="btn sm primary" id="inspSave" ${canExport ? '' : 'disabled'}>保存长图</button>
+      </div>
+    </section>
+    ${state.inspectError ? `<div class="banner error">${esc(state.inspectError)}</div>` : ''}
+    ${!d ? `<div class="card empty"><h3>正在巡检…</h3><p>读取节点实时指标，计算健康分与扣分项</p></div>` : inspectHTML(d)}`;
+  $('#inspBack').addEventListener('click', () => { state.subview = null; renderPage(); });
+  $('#inspRefresh').addEventListener('click', loadInspect);
+  if (canExport) {
+    $('#inspSave').addEventListener('click', saveInspectImage);
+    $('#inspCopy').addEventListener('click', copyInspectImage);
+  }
+}
+
+function roundRectPath(ctx, x, y, w, h, r) {
+  r = Math.min(r, w / 2, h / 2);
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+
+function fitCanvasText(ctx, text, maxW) {
+  text = String(text || '');
+  if (ctx.measureText(text).width <= maxW) return text;
+  let t = text;
+  while (t.length > 1 && ctx.measureText(t + '…').width > maxW) t = t.slice(0, -1);
+  return t + '…';
+}
+
+function inspectBarColor(p) {
+  if (p >= 90) return '#dc2626';
+  if (p >= 80) return '#d97706';
+  if (p >= 65) return '#2563eb';
+  return '#16a34a';
+}
+
+const INSPECT_FONT = '"Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", "Hiragino Sans GB", "Noto Sans CJK SC", sans-serif';
+
+function buildInspectCanvas(d) {
+  const dpr = 2;
+  const W = 900, pad = 36;
+  const cardX = pad, cardW = W - pad * 2;
+  const headerH = 208, chipsH = 76, nodeH = 172, nodeGap = 14, footerH = 76;
+  const nodes = d.nodes || [];
+  const H = pad + headerH + chipsH + Math.max(nodes.length, 1) * (nodeH + nodeGap) + footerH + 16;
+  const canvas = document.createElement('canvas');
+  canvas.width = W * dpr;
+  canvas.height = H * dpr;
+  const ctx = canvas.getContext('2d');
+  ctx.scale(dpr, dpr);
+
+  ctx.fillStyle = '#eef2f8';
+  ctx.fillRect(0, 0, W, H);
+  roundRectPath(ctx, cardX, pad, cardW, H - pad * 2, 26);
+  ctx.fillStyle = '#ffffff';
+  ctx.fill();
+
+  ctx.save();
+  roundRectPath(ctx, cardX, pad, cardW, headerH, 26);
+  ctx.clip();
+  const g = ctx.createLinearGradient(cardX, pad, cardX + cardW, pad + headerH);
+  g.addColorStop(0, '#1e40af');
+  g.addColorStop(0.55, '#2563eb');
+  g.addColorStop(1, '#0891b2');
+  ctx.fillStyle = g;
+  ctx.fillRect(cardX, pad, cardW, headerH);
+  ctx.globalAlpha = 0.1;
+  ctx.fillStyle = '#ffffff';
+  ctx.beginPath(); ctx.arc(cardX + cardW - 60, pad + 24, 140, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath(); ctx.arc(cardX + cardW - 230, pad + headerH + 40, 96, 0, Math.PI * 2); ctx.fill();
+  ctx.globalAlpha = 1;
+
+  ctx.fillStyle = 'rgba(219, 234, 254, 0.95)';
+  ctx.font = '600 13px ' + INSPECT_FONT;
+  ctx.fillText('KAYPANEL · 一键巡检', cardX + 44, pad + 48);
+  ctx.fillStyle = '#ffffff';
+  ctx.font = '700 34px ' + INSPECT_FONT;
+  ctx.fillText('服务器巡检报告', cardX + 44, pad + 102);
+  ctx.fillStyle = 'rgba(219, 234, 254, 0.92)';
+  ctx.font = '400 14px ' + INSPECT_FONT;
+  ctx.fillText(`${fmtTime(d.time)} · 共 ${d.total} 台节点 · 在线 ${d.online} 台`, cardX + 44, pad + 136);
+  ctx.fillStyle = 'rgba(219, 234, 254, 0.75)';
+  ctx.font = '400 12px ' + INSPECT_FONT;
+  ctx.fillText(`KayPanel ${d.version || ''}`, cardX + 44, pad + 168);
+
+  const cx = cardX + cardW - 112, cy = pad + 100, r = 62;
+  ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2);
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.14)'; ctx.fill();
+  ctx.lineWidth = 2; ctx.strokeStyle = 'rgba(255, 255, 255, 0.28)';
+  ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.stroke();
+  ctx.lineWidth = 7; ctx.lineCap = 'round'; ctx.strokeStyle = '#ffffff';
+  ctx.beginPath();
+  ctx.arc(cx, cy, r - 8, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * Math.max(0, Math.min(100, d.average)) / 100);
+  ctx.stroke();
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#ffffff'; ctx.font = '700 42px ' + INSPECT_FONT;
+  ctx.fillText(String(d.average), cx, cy + 10);
+  ctx.fillStyle = 'rgba(219, 234, 254, 0.9)'; ctx.font = '400 12px ' + INSPECT_FONT;
+  ctx.fillText('综合评分', cx, cy + 32);
+  ctx.textAlign = 'left';
+  ctx.restore();
+
+  const counts = d.counts || {};
+  const chips = [
+    ['全部', d.total, '#64748b', '#f1f5f9'],
+    ['优秀', counts['优秀'] || 0, '#16a34a', '#e9f7ef'],
+    ['良好', counts['良好'] || 0, '#2563eb', '#eef4ff'],
+    ['一般', counts['一般'] || 0, '#b45309', '#fff7e8'],
+    ['需关注', counts['需关注'] || 0, '#dc2626', '#fef2f2'],
+  ];
+  if (counts['在线']) chips.push(['在线', counts['在线'], '#0891b2', '#ecfeff']);
+  if (counts['离线']) chips.push(['离线', counts['离线'], '#64748b', '#f1f5f9']);
+  let chipX = cardX + 44;
+  const chipY = pad + headerH + 22;
+  for (const [label, value, color, soft] of chips) {
+    const cw = 104;
+    roundRectPath(ctx, chipX, chipY, cw, 34, 8);
+    ctx.fillStyle = soft; ctx.fill();
+    ctx.fillStyle = color;
+    ctx.beginPath(); ctx.arc(chipX + 15, chipY + 17, 4, 0, Math.PI * 2); ctx.fill();
+    ctx.font = '600 13px ' + INSPECT_FONT;
+    ctx.fillText(label, chipX + 26, chipY + 22);
+    ctx.textAlign = 'right';
+    ctx.font = '700 15px ' + INSPECT_FONT;
+    ctx.fillText(String(value), chipX + cw - 12, chipY + 23);
+    ctx.textAlign = 'left';
+    chipX += cw + 8;
+  }
+
+  let y = pad + headerH + chipsH;
+  if (!nodes.length) {
+    ctx.fillStyle = '#94a3b8'; ctx.font = '400 14px ' + INSPECT_FONT;
+    ctx.textAlign = 'center';
+    ctx.fillText('尚未添加节点', W / 2, y + 80);
+    ctx.textAlign = 'left';
+  }
+  for (const n of nodes) {
+    const tone = inspectTone(n.grade);
+    const x = cardX + 28, w = cardW - 56;
+    roundRectPath(ctx, x, y, w, nodeH, 16);
+    ctx.fillStyle = '#fbfcfe'; ctx.fill();
+    ctx.lineWidth = 1; ctx.strokeStyle = '#e5eaf2'; ctx.stroke();
+    roundRectPath(ctx, x, y + 16, 5, nodeH - 32, 2.5);
+    ctx.fillStyle = tone; ctx.fill();
+
+    const nx = x + 26;
+    ctx.fillStyle = '#0f172a'; ctx.font = '600 18px ' + INSPECT_FONT;
+    ctx.fillText(fitCanvasText(ctx, n.name, 480), nx, y + 34);
+    ctx.fillStyle = '#64748b'; ctx.font = '400 12px ' + INSPECT_FONT;
+    const subtitle = `${n.user ? n.user + '@' : ''}${n.addr}${n.os ? ' · ' + n.os : ''}`;
+    ctx.fillText(fitCanvasText(ctx, subtitle, 540), nx, y + 56);
+
+    ctx.textAlign = 'right';
+    ctx.fillStyle = tone; ctx.font = '700 32px ' + INSPECT_FONT;
+    ctx.fillText(String(n.score), x + w - 92, y + 42);
+    ctx.fillStyle = '#94a3b8'; ctx.font = '400 12px ' + INSPECT_FONT;
+    ctx.fillText('分', x + w - 72, y + 42);
+    ctx.fillStyle = tone; ctx.font = '600 12px ' + INSPECT_FONT;
+    ctx.fillText(n.grade, x + w - 72, y + 62);
+    ctx.textAlign = 'left';
+
+    let issueText, issueColor;
+    if (!n.online) {
+      issueText = '节点离线，无法读取指标' + (n.issues && n.issues[1] ? ' · ' + n.issues[1] : '');
+      issueColor = '#dc2626';
+      ctx.fillStyle = '#94a3b8'; ctx.font = '400 12.5px ' + INSPECT_FONT;
+      ctx.fillText('无法获取 CPU / 内存 / 磁盘数据', nx, y + 96);
+    } else if (n.sftp_only) {
+      issueText = '虚拟主机 · 仅 SFTP 文件管理';
+      issueColor = '#0891b2';
+      ctx.fillStyle = '#94a3b8'; ctx.font = '400 12.5px ' + INSPECT_FONT;
+      ctx.fillText('不采集系统指标，仅验证连接可用', nx, y + 96);
+    } else {
+      const metrics = [['CPU', n.cpu], ['内存', n.mem_pct], ['磁盘', n.disk_pct]];
+      const mw = 232, gap = 22, by = y + 84;
+      metrics.forEach(([label, val], i) => {
+        const mx = nx + i * (mw + gap);
+        const p = Math.max(0, Math.min(100, Number(val) || 0));
+        ctx.fillStyle = '#64748b'; ctx.font = '400 12px ' + INSPECT_FONT;
+        ctx.fillText(label, mx, by);
+        ctx.textAlign = 'right'; ctx.fillStyle = '#334155'; ctx.font = '600 12px ' + INSPECT_FONT;
+        ctx.fillText(p.toFixed(1) + '%', mx + mw, by);
+        ctx.textAlign = 'left';
+        roundRectPath(ctx, mx, by + 9, mw, 7, 3.5); ctx.fillStyle = '#e9eef6'; ctx.fill();
+        if (p > 0) {
+          roundRectPath(ctx, mx, by + 9, Math.max(4, mw * p / 100), 7, 3.5);
+          ctx.fillStyle = inspectBarColor(p); ctx.fill();
+        }
+      });
+      ctx.fillStyle = '#94a3b8'; ctx.font = '400 11.5px ' + INSPECT_FONT;
+      const meta = `负载 ${(Number(n.load1) || 0).toFixed(2)} · 运行 ${fmtUptime(n.uptime)}` +
+        (n.docker_total > 0 ? ` · 容器 ${n.docker_running}/${n.docker_total} 运行` : '') +
+        (n.temp > 0 ? ` · 温度 ${n.temp.toFixed(0)}°C` : '');
+      ctx.fillText(fitCanvasText(ctx, meta, w - 52), nx, y + 122);
+      issueText = n.issues && n.issues.length ? '待关注：' + n.issues.join(' · ') : '未发现明显问题';
+      issueColor = n.issues && n.issues.length ? '#b45309' : '#16a34a';
+    }
+    ctx.fillStyle = issueColor; ctx.font = '500 12px ' + INSPECT_FONT;
+    ctx.fillText(fitCanvasText(ctx, issueText, w - 52), nx, y + 148);
+    y += nodeH + nodeGap;
+  }
+
+  const fy = H - pad - 30;
+  ctx.strokeStyle = '#e9edf4';
+  ctx.beginPath(); ctx.moveTo(cardX + 44, fy - 22); ctx.lineTo(cardX + cardW - 44, fy - 22); ctx.stroke();
+  ctx.fillStyle = '#94a3b8'; ctx.font = '400 12px ' + INSPECT_FONT;
+  ctx.fillText('由 KayPanel 自动生成 · 数据为巡检时刻快照', cardX + 44, fy);
+  ctx.textAlign = 'right';
+  ctx.fillText(`KayPanel ${d.version || ''}`, cardX + cardW - 44, fy);
+  ctx.textAlign = 'left';
+  return canvas;
+}
+
+function inspectStamp() {
+  const d = new Date();
+  const p = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}`;
+}
+
+function saveInspectImage() {
+  const d = state.inspect;
+  if (!d) return;
+  const canvas = buildInspectCanvas(d);
+  canvas.toBlob(blob => {
+    if (!blob) { toast('生成图片失败', 'error'); return; }
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `KayPanel-巡检报告-${inspectStamp()}.png`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+    toast('巡检长图已保存');
+  }, 'image/png');
+}
+
+async function copyInspectImage() {
+  const d = state.inspect;
+  if (!d) return;
+  try {
+    if (!navigator.clipboard || typeof ClipboardItem === 'undefined') throw new Error('unsupported');
+    const canvas = buildInspectCanvas(d);
+    const blob = await new Promise(res => canvas.toBlob(res, 'image/png'));
+    await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+    toast('已复制到剪贴板，可直接粘贴到聊天窗口');
+  } catch (e) {
+    toast('复制失败，请使用「保存长图」', 'error');
+  }
 }
 
 function settingsPayload(extra) {

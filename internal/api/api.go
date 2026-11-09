@@ -70,6 +70,8 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/notify/test", s.auth(s.handleNotifyTest))
 	mux.Handle("POST /api/ai/chat", s.auth(s.handleAIChat))
 	mux.Handle("POST /api/ai/models", s.auth(s.handleAIModels))
+	mux.Handle("POST /api/ai/action", s.auth(s.handleAIAction))
+	mux.Handle("GET /api/inspect", s.auth(s.handleInspect))
 	mux.Handle("GET /api/audit", s.auth(s.handleAudit))
 	mux.Handle("GET /api/overview", s.auth(s.handleOverview))
 	mux.Handle("GET /api/templates", s.auth(s.handleTemplates))
