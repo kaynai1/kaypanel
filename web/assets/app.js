@@ -32,12 +32,58 @@ const state = {
   terminal: null,
   logs: null,
   audit: [],
+  auditAt: 0,
+  trendMetric: 'cpu',
+  autoRefresh: prefOn('kp_auto'),
+  procOn: prefOn('kp_proc'),
+  alertOn: prefOn('kp_alert'),
 };
+
+function prefOn(key) {
+  return localStorage.getItem(key) !== '0';
+}
 
 /* ---------- helpers ---------- */
 
 function esc(v) {
   return String(v == null ? '' : v).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+const ICON_PATHS = {
+  overview: '<rect x="3" y="3" width="7" height="7" rx="1.6"/><rect x="14" y="3" width="7" height="7" rx="1.6"/><rect x="3" y="14" width="7" height="7" rx="1.6"/><rect x="14" y="14" width="7" height="7" rx="1.6"/>',
+  container: '<path d="M21 8.4 12 3 3 8.4v7.2L12 21l9-5.4V8.4Z"/><path d="M3.4 8.5 12 13l8.6-4.5"/><path d="M12 13v8"/>',
+  app: '<path d="m12 3 9 4.8-9 4.8-9-4.8L12 3Z"/><path d="m3 12.5 9 4.8 9-4.8"/><path d="m3 17 9 4.8 9-4.8"/>',
+  folder: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z"/>',
+  terminal: '<rect x="3" y="4.5" width="18" height="15" rx="2.5"/><path d="m7.5 10 2.5 2-2.5 2"/><path d="M12.5 14H16"/>',
+  settings: '<path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2Z"/><circle cx="12" cy="12" r="3"/>',
+  refresh: '<path d="M20 11a8 8 0 1 0-2.6 6.3"/><path d="M20 4v7h-7"/>',
+  plus: '<path d="M12 5v14M5 12h14"/>',
+  chevron: '<path d="m6 9 6 6 6-6"/>',
+  logout: '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5"/><path d="M21 12H9"/>',
+  activity: '<path d="M3 12h4l2.4-7 4.8 14 2.4-7H21"/>',
+};
+
+function ico(name, cls = '') {
+  const paths = ICON_PATHS[name] || '';
+  return `<svg${cls ? ` class="${cls}"` : ''} viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths}</svg>`;
+}
+
+const AVATAR_COLORS = ['#2563eb', '#7c3aed', '#0891b2', '#059669', '#d97706', '#dc2626', '#db2777', '#4f46e5'];
+
+function avatarColor(seed) {
+  let h = 0;
+  for (const ch of String(seed || '')) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  return AVATAR_COLORS[h % AVATAR_COLORS.length];
+}
+
+function initialOf(name) {
+  const s = String(name || '?').trim();
+  return (s[0] || '?').toUpperCase();
+}
+
+function todayCN() {
+  const d = new Date();
+  return `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日 周${'日一二三四五六'[d.getDay()]}`;
 }
 
 function fmtBytes(n) {
@@ -191,38 +237,62 @@ function renderLogin() {
 
 function renderShell() {
   $('#app').innerHTML = `
-    <header class="topbar">
-      <div class="brand">
-        <img class="brand-logo" src="/assets/logo.svg" alt="">
-        <div class="brand-text"><b>KayPanel</b><span class="brand-sub">多机管理</span></div>
+  <div class="shell">
+    <aside class="sidebar">
+      <div class="side-brand">
+        <img src="/assets/logo.svg" alt="">
+        <div class="side-brand-text"><b>KayPanel</b><span>${esc(state.version || 'dev')}</span></div>
       </div>
-      <nav class="tabs" id="tabs">
-        <button class="tab" data-page="overview">概览</button>
-        <button class="tab" data-page="containers">容器</button>
-        <button class="tab" data-page="apps">应用</button>
-        <button class="tab" data-page="files">文件</button>
-        <button class="tab" data-page="terminal">终端</button>
-        <button class="tab" data-page="settings">设置</button>
+      <nav class="side-nav" id="sideNav">
+        <div class="nav-group">监控</div>
+        <button class="nav-item" data-page="overview">${ico('overview')}<span>概览</span></button>
+        <button class="nav-item" data-page="containers">${ico('container')}<span>容器</span><span class="nav-badge hidden" id="navCtrBadge"></span></button>
+        <button class="nav-item" data-page="apps">${ico('app')}<span>应用</span></button>
+        <div class="nav-group">工具</div>
+        <button class="nav-item" data-page="files">${ico('folder')}<span>文件</span></button>
+        <button class="nav-item" data-page="terminal">${ico('terminal')}<span>终端</span></button>
+        <div class="nav-group">系统</div>
+        <button class="nav-item" data-page="settings">${ico('settings')}<span>设置</span></button>
       </nav>
-      <div class="top-right">
-        <span class="ver">${esc(state.version || 'dev')}</span>
-        ${state.desktop ? '' : '<button class="btn-logout" id="logoutBtn">退出</button>'}
+      <div class="side-foot">
+        <span class="foot-ic">${ico('activity')}</span>
+        <div class="foot-main"><b>数据目录</b><span>${state.desktop ? 'AppData\\Roaming\\KayPanel' : 'data/'}</span></div>
       </div>
-    </header>
-    <div class="subbar">
-      <div class="node-pills" id="nodePills"></div>
-      <div class="sub-right"><span class="live-dot"></span><span>实时监控</span></div>
+    </aside>
+    <div class="main-col">
+      <header class="topbar">
+        <div class="node-switch" id="nodeSwitchWrap"></div>
+        <div class="live-pill"><span class="live-dot"></span>实时监控</div>
+        <div class="top-right">
+          <button class="icon-btn" id="topRefresh" title="刷新当前页">${ico('refresh')}</button>
+          ${state.desktop ? '' : `<button class="icon-btn" id="logoutBtn" title="退出登录">${ico('logout')}</button>`}
+        </div>
+      </header>
+      <div class="content" id="content">
+        <main class="page-main" id="page"></main>
+        <aside class="rail" id="rail"></aside>
+      </div>
     </div>
-    <main class="page" id="page"></main>`;
+  </div>`;
 
-  $('#tabs').addEventListener('click', e => {
+  $('#sideNav').addEventListener('click', e => {
     const btn = e.target.closest('[data-page]');
     if (btn) navigate(btn.dataset.page);
   });
-  $('#nodePills').addEventListener('click', e => {
-    const btn = e.target.closest('[data-node]');
-    if (btn) selectNode(btn.dataset.node);
+  $('#nodeSwitchWrap').addEventListener('click', e => {
+    const nodeBtn = e.target.closest('[data-node]');
+    if (nodeBtn) { closeNodeMenu(); selectNode(nodeBtn.dataset.node); return; }
+    if (e.target.closest('[data-addnode]')) { closeNodeMenu(); openNodeForm(null); return; }
+    if (e.target.closest('#nodeSwitch')) {
+      e.stopPropagation();
+      const menu = $('#nodeMenu');
+      if (menu) menu.classList.toggle('open');
+    }
   });
+  document.addEventListener('click', e => {
+    if (!e.target.closest('#nodeSwitchWrap')) closeNodeMenu();
+  });
+  $('#topRefresh').addEventListener('click', refreshCurrentPage);
   if ($('#logoutBtn')) {
     $('#logoutBtn').addEventListener('click', async () => {
       try { await api('/api/logout', { method: 'POST', body: '{}' }); } catch (e) {}
@@ -233,26 +303,54 @@ function renderShell() {
   updateNodePills();
 }
 
-function updateTabs() {
-  $$('.tab').forEach(t => t.classList.toggle('active', t.dataset.page === state.page));
-  const tabs = $('#tabs');
-  const active = tabs && tabs.querySelector('.tab.active');
-  if (tabs && active && tabs.scrollWidth > tabs.clientWidth) {
-    active.scrollIntoView({ inline: 'center', block: 'nearest' });
+function closeNodeMenu() {
+  const m = $('#nodeMenu');
+  if (m) m.classList.remove('open');
+}
+
+function refreshCurrentPage() {
+  switch (state.page) {
+    case 'overview': loadOverview(true); loadProcesses(); break;
+    case 'containers': loadContainers(); break;
+    case 'apps': loadStacks(); break;
+    case 'files': loadFiles(state.filePath); break;
+    default: renderPage();
   }
 }
 
+function updateTabs() {
+  $$('.nav-item').forEach(t => t.classList.toggle('active', t.dataset.page === state.page));
+}
+
+function nodeSwitchHTML() {
+  const n = currentNode();
+  const chip = n
+    ? `<button type="button" class="switch-chip" id="nodeSwitch">
+        <span class="avatar" style="background:${avatarColor(n.id)}">${esc(initialOf(n.name))}</span>
+        <span class="switch-main"><b>${esc(n.name)}</b><span>${esc(n.user)}@${esc(n.addr)}</span></span>
+        <span class="dot ${n.online ? 'online' : 'offline'}"></span>
+        ${ico('chevron', 'chev')}
+      </button>`
+    : `<button type="button" class="switch-chip" id="nodeSwitch"><span class="switch-main"><b>未选择节点</b><span>添加节点后开始管理</span></span>${ico('chevron', 'chev')}</button>`;
+  const rows = state.nodes.map(x => `
+    <button type="button" class="acct-item ${x.id === state.selected ? 'active' : ''}" data-node="${esc(x.id)}">
+      <span class="avatar" style="background:${avatarColor(x.id)}">${esc(initialOf(x.name))}</span>
+      <span class="acct-main"><b>${esc(x.name)}${x.id === state.selected ? '<span class="tag-soft">当前</span>' : ''}</b><span>${esc(x.user)}@${esc(x.addr)}</span></span>
+      <span class="acct-state"><span class="dot ${x.online ? 'online' : 'offline'}"></span>${x.online ? '在线' : '离线'}</span>
+    </button>`).join('') || `<div class="rail-empty">尚未添加节点</div>`;
+  return `${chip}<div class="node-menu" id="nodeMenu"><div class="menu-head">切换节点</div>${rows}<button type="button" class="rail-add" data-addnode>+ 添加节点</button></div>`;
+}
+
 function updateNodePills() {
-  const wrap = $('#nodePills');
-  if (!wrap) return;
-  if (!state.nodes.length) {
-    wrap.innerHTML = `<span class="pill-label">节点</span><span class="muted" style="font-size:12.5px">尚未添加节点</span>`;
-    return;
+  const wrap = $('#nodeSwitchWrap');
+  if (wrap && !wrap.querySelector('.node-menu.open')) wrap.innerHTML = nodeSwitchHTML();
+  updateRailNodes();
+  const badge = $('#navCtrBadge');
+  if (badge) {
+    const total = state.nodes.filter(n => n.online).reduce((a, n) => a + Math.max(0, Number(n.latest && n.latest.docker_running) || 0), 0);
+    badge.textContent = total ? String(total) : '';
+    badge.classList.toggle('hidden', !total);
   }
-  wrap.innerHTML = `<span class="pill-label">节点</span>` + state.nodes.map(n => `
-    <button class="node-pill ${n.id === state.selected ? 'active' : ''}" data-node="${esc(n.id)}" title="${esc(n.name + ' · ' + n.addr)}">
-      <span class="dot ${n.online ? 'online' : 'offline'}"></span>${esc(n.name)}
-    </button>`).join('') + `<span class="node-count">${state.nodes.length} 台</span>`;
 }
 
 function navigate(page) {
@@ -283,10 +381,12 @@ function selectNode(id) {
   state.fileNode = '';
   state.processes = [];
   state.procNode = '';
+  closeNodeMenu();
   updateNodePills();
   if (state.page === 'overview' && !state.subview) {
     drawOverview();
     loadProcesses();
+    restartOverviewTimers();
   } else if (!state.subview) {
     renderPage();
   }
@@ -303,6 +403,7 @@ function renderPage() {
   cleanupPage();
   updateTabs();
   updateNodePills();
+  syncRail();
   const sub = state.subview;
   if (sub && sub.type === 'stack-edit') return renderStackEditor(sub);
   if (sub && sub.type === 'file-edit') return renderFileEditor(sub);
@@ -318,6 +419,19 @@ function renderPage() {
   }
 }
 
+function syncRail() {
+  const on = state.page === 'overview' && !state.subview;
+  const content = $('#content');
+  if (content) content.classList.toggle('rail-on', on);
+  const rail = $('#rail');
+  if (!rail) return;
+  if (!on) {
+    rail.innerHTML = '';
+  } else if (!$('#railNodes')) {
+    renderRail();
+  }
+}
+
 /* ---------- overview ---------- */
 
 async function loadOverview(render = true) {
@@ -329,7 +443,10 @@ async function loadOverview(render = true) {
     if (data.version) state.version = data.version;
     ensureSelected();
     updateNodePills();
-    if (render && state.page === 'overview' && !state.subview) drawOverview();
+    if (render && state.page === 'overview' && !state.subview) {
+      drawOverview();
+      if (Date.now() - state.auditAt > 20000) loadRailOps();
+    }
   } catch (e) {
     state.overviewError = e.message;
     if (state.page === 'overview' && !state.subview) drawOverview();
@@ -354,15 +471,40 @@ async function refreshNodesLight() {
 function renderOverview() {
   drawOverview();
   loadProcesses();
-  state.pageTimer = setInterval(() => loadOverview(true), 3000);
-  state.procTimer = setInterval(loadProcesses, 9000);
+  restartOverviewTimers();
+}
+
+function restartOverviewTimers() {
+  if (state.page !== 'overview' || state.subview) return;
+  if (state.pageTimer) { clearInterval(state.pageTimer); state.pageTimer = null; }
+  if (state.procTimer) { clearInterval(state.procTimer); state.procTimer = null; }
+  if (state.autoRefresh) state.pageTimer = setInterval(() => loadOverview(true), 3000);
+  if (state.procOn) state.procTimer = setInterval(loadProcesses, 9000);
 }
 
 let chartSeq = 0;
 
+function smoothPath(pts) {
+  if (!pts.length) return '';
+  if (pts.length === 1) return `M${pts[0][0]},${pts[0][1]}`;
+  let d = `M${pts[0][0].toFixed(1)},${pts[0][1].toFixed(1)}`;
+  for (let i = 0; i < pts.length - 1; i++) {
+    const p0 = pts[i - 1] || pts[i];
+    const p1 = pts[i];
+    const p2 = pts[i + 1];
+    const p3 = pts[i + 2] || p2;
+    const c1x = p1[0] + (p2[0] - p0[0]) / 6;
+    const c1y = p1[1] + (p2[1] - p0[1]) / 6;
+    const c2x = p2[0] - (p3[0] - p1[0]) / 6;
+    const c2y = p2[1] - (p3[1] - p1[1]) / 6;
+    d += ` C${c1x.toFixed(1)},${c1y.toFixed(1)} ${c2x.toFixed(1)},${c2y.toFixed(1)} ${p2[0].toFixed(1)},${p2[1].toFixed(1)}`;
+  }
+  return d;
+}
+
 function chartSVG(series, opts = {}) {
   const height = opts.height || 112;
-  const w = 600, h = height, pad = 6;
+  const w = 600, h = height, pad = 4;
   const all = [];
   series.forEach(s => s.values.forEach(v => { if (typeof v === 'number' && isFinite(v)) all.push(v); }));
   const peak = Math.max(opts.max || 0, ...all);
@@ -373,10 +515,10 @@ function chartSVG(series, opts = {}) {
     if (vals.length < 2) continue;
     const step = (w - pad * 2) / (vals.length - 1);
     const pts = vals.map((v, i) => [pad + i * step, h - pad - (Math.max(0, Math.min(v, mx)) / mx) * (h - pad * 2)]);
-    const line = pts.map((p, i) => `${i ? 'L' : 'M'}${p[0].toFixed(1)},${p[1].toFixed(1)}`).join(' ');
+    const line = smoothPath(pts);
     if (s.fill) {
       const gid = 'kp-grad-' + (++chartSeq);
-      defs += `<linearGradient id="${gid}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${s.color}" stop-opacity="0.22"/><stop offset="1" stop-color="${s.color}" stop-opacity="0"/></linearGradient>`;
+      defs += `<linearGradient id="${gid}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${s.color}" stop-opacity="0.2"/><stop offset="1" stop-color="${s.color}" stop-opacity="0"/></linearGradient>`;
       paths += `<path d="${line} L${pts[pts.length - 1][0].toFixed(1)},${h - pad} L${pts[0][0].toFixed(1)},${h - pad} Z" fill="url(#${gid})"/>`;
     }
     paths += `<path class="chart-line" d="${line}" stroke="${s.color}"/>`;
@@ -386,126 +528,212 @@ function chartSVG(series, opts = {}) {
   return `<svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">${defs}${grids}${paths}</svg>`;
 }
 
-function nodeCard(n) {
-  const m = n.latest || {};
-  const memP = pct(m.mem_used, m.mem_total);
-  const diskP = pct(m.disk_used, m.disk_total);
-  const hist = (n.history || []).map(s => s.cpu || 0);
-  const alerts = (n.alerts || []).filter(a => a !== '离线');
-  return `
-  <article class="node-card ${n.id === state.selected ? 'active' : ''} ${n.online ? '' : 'offline-card'}" data-node="${esc(n.id)}" tabindex="0">
-    <div class="node-card-top">
-      <div>
-        <h3 class="node-name">${esc(n.name)}</h3>
-        <div class="node-addr">${esc(n.user)}@${esc(n.addr)}</div>
-      </div>
-      <span class="chip ${n.online ? 'online' : 'offline'}">${n.online ? '在线' : '离线'}</span>
+function statCards() {
+  const nodes = state.nodes;
+  const online = nodes.filter(n => n.online);
+  const latest = online.map(n => n.latest || {});
+  const dockerNodes = latest.filter(m => Number(m.docker_total) >= 0);
+  const dockerRunning = dockerNodes.reduce((a, m) => a + Math.max(0, Number(m.docker_running) || 0), 0);
+  const dockerTotal = dockerNodes.reduce((a, m) => a + Math.max(0, Number(m.docker_total) || 0), 0);
+  const cores = latest.reduce((a, m) => a + Math.max(0, Number(m.cores) || 0), 0);
+  const cpuVals = latest.map(m => Number(m.cpu) || 0);
+  const avgCpu = cpuVals.length ? cpuVals.reduce((a, b) => a + b, 0) / cpuVals.length : null;
+  const maxCpu = cpuVals.length ? Math.max(...cpuVals) : null;
+  const memUsed = latest.reduce((a, m) => a + (Number(m.mem_used) || 0), 0);
+  const memTotal = latest.reduce((a, m) => a + (Number(m.mem_total) || 0), 0);
+  const memP = pct(memUsed, memTotal);
+  const offCount = nodes.length - online.length;
+  return `<div class="stat-grid">
+    <div class="stat-card">
+      <div class="stat-label">在线节点</div>
+      <div class="stat-value">${online.length}<small>/ ${nodes.length}</small></div>
+      <div class="stat-sub ${offCount ? 'warn' : nodes.length ? 'ok' : ''}">${nodes.length ? (offCount ? `${offCount} 台离线` : '全部节点连接正常') : '尚未添加节点'}</div>
     </div>
-    ${alerts.length ? `<div class="alert-row">${alerts.map(a => `<span class="alert-chip">${esc(a)}</span>`).join('')}</div>` : ''}
-    <div class="node-metrics">
-      <div>
-        <div class="metric-label">CPU</div>
-        <div class="big-metric"><b>${m.cpu != null ? Number(m.cpu).toFixed(1) : '-'}</b><span>%</span></div>
-      </div>
-      <div class="mini-chart">${chartSVG([{ values: hist, color: 'var(--accent)', fill: true }], { height: 42, max: 100 })}</div>
+    <div class="stat-card">
+      <div class="stat-label">运行容器</div>
+      <div class="stat-value">${dockerNodes.length ? dockerRunning : '—'}${dockerNodes.length ? '<small>个</small>' : ''}</div>
+      <div class="stat-sub">${dockerNodes.length ? `共 ${dockerTotal} 个容器 · ${dockerNodes.length} 台已装 Docker` : '未检测到 Docker'}</div>
     </div>
-    <div class="bars">
-      <div class="bar-row"><span class="bar-label">内存</span><div class="bar-track"><div class="bar-fill mem ${memP >= state.settings.mem_alert ? 'warn' : ''}" style="width:${memP.toFixed(1)}%"></div></div><span class="bar-value">${m.mem_total ? memP.toFixed(0) + '%' : '-'}</span></div>
-      <div class="bar-row"><span class="bar-label">磁盘</span><div class="bar-track"><div class="bar-fill disk ${diskP >= state.settings.disk_alert ? 'warn' : ''}" style="width:${diskP.toFixed(1)}%"></div></div><span class="bar-value">${m.disk_total ? diskP.toFixed(0) + '%' : '-'}</span></div>
+    <div class="stat-card">
+      <div class="stat-label">平均 CPU 使用率</div>
+      <div class="stat-value">${avgCpu != null ? avgCpu.toFixed(1) : '—'}<small>%</small></div>
+      <div class="stat-sub">${maxCpu != null ? `最高 ${maxCpu.toFixed(1)}% · ${cores} 核` : '等待采样'}</div>
     </div>
-    <div class="node-foot">
-      <span>负载 ${m.load1 != null ? Number(m.load1).toFixed(2) : '-'}</span>
-      <span>↓ ${fmtRate(m.net_rx)}</span>
-      <span>↑ ${fmtRate(m.net_tx)}</span>
-      <span>${m.uptime ? fmtUptime(m.uptime) : '-'}</span>
+    <div class="stat-card">
+      <div class="stat-label">平均内存占用</div>
+      <div class="stat-value">${memTotal ? memP.toFixed(1) : '—'}<small>%</small></div>
+      <div class="stat-sub">${memTotal ? `${fmtBytes(memUsed)} / ${fmtBytes(memTotal)}` : '等待采样'}</div>
     </div>
-  </article>`;
+  </div>`;
 }
 
-function processRows(list) {
-  if (!list || !list.length) return `<tr><td colspan="4" class="muted">暂无数据</td></tr>`;
-  return list.slice(0, 10).map(p => `
-    <tr>
-      <td><span class="proc-comm">${esc(p.comm)}</span> <span class="faint">#${esc(p.pid)}</span></td>
-      <td class="num">${(Number(p.cpu) || 0).toFixed(1)}%</td>
-      <td class="num">${(Number(p.mem) || 0).toFixed(1)}%</td>
-      <td class="faint">${esc(p.elapsed)}</td>
-    </tr>`).join('');
+function trendSeries(n) {
+  const hist = (n && n.history) || [];
+  const m = (n && n.latest) || {};
+  if (state.trendMetric === 'mem') {    return {
+      title: '内存使用率',
+      values: hist.map(s => pct(s.mem_used, s.mem_total)),
+      max: 100,
+      series: [{ values: hist.map(s => pct(s.mem_used, s.mem_total)), color: '#7c3aed', fill: true }],
+      value: m.mem_total ? pct(m.mem_used, m.mem_total).toFixed(1) : '—',
+      unit: '%',
+      sub: m.mem_total ? `${fmtBytes(m.mem_used)} / ${fmtBytes(m.mem_total)}` : '',
+      showDelta: true,
+    };
+  }
+  if (state.trendMetric === 'net') {
+    const rx = hist.map(s => Number(s.net_rx) || 0);
+    const tx = hist.map(s => Number(s.net_tx) || 0);
+    return {
+      title: '网络吞吐',
+      values: rx,
+      max: Math.max(1, ...rx, ...tx),
+      series: [
+        { values: rx, color: '#2563eb', fill: true },
+        { values: tx, color: '#a855f7' },
+      ],
+      value: fmtRate(m.net_rx),
+      unit: '',
+      sub: `↑ ${fmtRate(m.net_tx)}`,
+      showDelta: false,
+      legend: [['下载', '#2563eb'], ['上传', '#a855f7']],
+    };
+  }
+  const cpuVals = hist.map(s => Number(s.cpu) || 0);
+  const cpuPeak = Math.max(1, ...cpuVals);
+  return {
+    title: 'CPU 使用率',
+    values: cpuVals,
+    max: Math.max(10, Math.ceil((cpuPeak * 1.25) / 10) * 10),
+    series: [{ values: cpuVals, color: '#2563eb', fill: true }],
+    value: m.cpu != null ? Number(m.cpu).toFixed(1) : '—',
+    unit: '%',
+    sub: `${m.cores || '-'} 核 · 负载 ${m.load1 != null ? Number(m.load1).toFixed(2) : '-'}`,
+    showDelta: true,
+  };
 }
 
-function detailHTML(n) {
-  const m = n.latest || {};
+function trendCard(n) {
+  if (!n) {
+    return `<div class="card trend-card"><div class="empty" style="padding:34px 16px"><h3>暂无监控数据</h3><p>添加节点后开始采集 CPU、内存与网络趋势</p></div></div>`;
+  }
+  const d = trendSeries(n);
   const hist = n.history || [];
-  const cpuSeries = hist.map(s => s.cpu || 0);
-  const memSeries = hist.map(s => pct(s.mem_used, s.mem_total));
-  const rxSeries = hist.map(s => s.net_rx || 0);
-  const txSeries = hist.map(s => s.net_tx || 0);
-  const memP = pct(m.mem_used, m.mem_total);
-  const diskP = pct(m.disk_used, m.disk_total);
-  const netMax = Math.max(1, ...rxSeries, ...txSeries);
-  return `
-    <div class="section-head">
+  const valid = d.values.filter(v => typeof v === 'number' && isFinite(v));
+  let deltaHTML = '';
+  if (d.showDelta && valid.length >= 2) {
+    const diff = valid[valid.length - 1] - valid[0];
+    deltaHTML = `<span class="delta ${diff < 0 ? 'down' : ''}">${diff >= 0 ? '+' : ''}${diff.toFixed(1)}%</span>`;
+  }
+  const samples = valid.length;
+  const spanSec = Math.max(0, (samples - 1) * 3);
+  const times = hist.map(s => Number(s.time) || 0).filter(t => t > 0);
+  const fmtClock = t => new Date(t * 1000).toLocaleTimeString('zh-CN', { hour12: false });
+  const tick = i => {
+    if (samples < 2) return '';
+    if (i === 4) return '现在';
+    if (times.length >= 2) return fmtClock(times[Math.round((times.length - 1) * i / 4)]);
+    const sec = Math.round(spanSec * (1 - i / 4));
+    if (sec >= 60) return `-${Math.round(sec / 60)} 分钟`;
+    return `-${sec} 秒`;
+  };
+  const ticks = [0, 1, 2, 3, 4].map(i => `<span>${tick(i)}</span>`).join('');
+  const metric = state.trendMetric;
+  return `<div class="card trend-card">
+    <div class="trend-head">
       <div>
-        <h2>节点详情 · ${esc(n.name)}</h2>
-        <div class="sub">${n.online ? '在线' : '离线'} · ${esc(m.os || '')} ${m.kernel ? '· ' + esc(m.kernel) : ''}</div>
+        <div class="trend-title">资源趋势</div>
+        <div class="trend-sub">当前节点 · ${esc(n.name)} · 每 3 秒采样</div>
       </div>
-      <div class="head-actions">
-        <button class="btn sm" id="goTerminal">打开终端</button>
-        <button class="btn sm ghost" id="goContainers">管理容器</button>
+      <div class="trend-tabs" id="trendTabs">
+        <button type="button" data-metric="cpu" class="${metric === 'cpu' ? 'active' : ''}">CPU</button>
+        <button type="button" data-metric="mem" class="${metric === 'mem' ? 'active' : ''}">内存</button>
+        <button type="button" data-metric="net" class="${metric === 'net' ? 'active' : ''}">网络</button>
       </div>
     </div>
-    ${!n.online && n.error ? `<div class="banner error">连接失败：${esc(n.error)}</div>` : ''}
-    <div class="detail-grid">
-      <div class="card chart-card span-8">
-        <div class="chart-head"><span class="chart-title">CPU 使用率</span><span class="chart-value">${(Number(m.cpu) || 0).toFixed(1)}<small>% · ${m.cores || '-'} 核</small></span></div>
-        <div class="chart-wrap">${chartSVG([{ values: cpuSeries, color: 'var(--accent)', fill: true }], { max: 100 })}</div>
-      </div>
-      <div class="card span-4">
-        <div class="chart-title" style="margin-bottom:10px">系统信息</div>
-        <div class="info-list">
-          <div class="info-row"><span>主机名</span><span>${esc(m.hostname || '-')}</span></div>
-          <div class="info-row"><span>系统</span><span class="os-pill" title="${esc(m.os || '')}">${esc(m.os || '-')}</span></div>
-          <div class="info-row"><span>内核</span><span>${esc(m.kernel || '-')}</span></div>
-          <div class="info-row"><span>运行时间</span><span>${m.uptime ? fmtUptime(m.uptime) : '-'}</span></div>
-          <div class="info-row"><span>CPU 温度</span><span>${m.temp > 0 ? m.temp.toFixed(1) + ' °C' : '未检测到'}</span></div>
-          <div class="info-row"><span>Docker</span><span>${m.docker_total >= 0 ? `${m.docker_running} 运行 / ${m.docker_total} 个` : '未安装'}</span></div>
-          <div class="info-row"><span>SSH</span><span>${esc(n.user)}@${esc(n.addr)}</span></div>
+    <div class="trend-value"><b>${esc(d.value)}</b>${d.unit ? `<span class="trend-unit">${esc(d.unit)}</span>` : ''}${deltaHTML}<span class="trend-sub-inline">${esc(d.sub)}${samples ? ` · ${samples} 个采样点` : ''}</span></div>
+    <div class="trend-chart">${chartSVG(d.series, { height: 176, max: d.max })}</div>
+    <div class="trend-foot">
+      <div class="trend-x">${ticks}</div>
+      ${d.legend ? `<div class="chart-legend">${d.legend.map(([label, color]) => `<span class="legend-item"><i class="legend-swatch" style="background:${color}"></i>${label}</span>`).join('')}</div>` : ''}
+    </div>
+  </div>`;
+}
+
+function nodesCard() {
+  if (!state.nodes.length) return noNodeHTML();
+  return `<div class="card list-card">
+    <div class="list-head">
+      <h2>节点状态</h2>
+      <span class="faint">${state.nodes.length} 台 · 点击切换当前节点</span>
+    </div>
+    ${state.nodes.map(n => {
+      const m = n.latest || {};
+      const memP = pct(m.mem_used, m.mem_total);
+      const diskP = pct(m.disk_used, m.disk_total);
+      const alerts = state.alertOn ? (n.alerts || []).filter(a => a !== '离线') : [];
+      return `<div class="node-line ${n.id === state.selected ? 'active' : ''}" data-node="${esc(n.id)}" tabindex="0">
+        <div class="nl-name">
+          <span class="avatar" style="background:${avatarColor(n.id)}">${esc(initialOf(n.name))}</span>
+          <div class="nl-main">
+            <b>${esc(n.name)}${n.id === state.selected ? '<span class="tag-soft">当前</span>' : ''}${alerts.length ? `<span class="alert-chip">${esc(alerts[0])}</span>` : ''}</b>
+            <span>${esc(n.user)}@${esc(n.addr)} · ${esc(m.os || '未知系统')}</span>
+          </div>
+        </div>
+        <div class="nl-metric">${n.online ? (Number(m.cpu) || 0).toFixed(1) + '%' : '—'}<span>CPU</span></div>
+        <div class="nl-metric">${m.mem_total ? memP.toFixed(0) + '%' : '—'}<span>内存</span></div>
+        <div class="nl-metric">${m.disk_total ? diskP.toFixed(0) + '%' : '—'}<span>磁盘</span></div>
+        <div class="nl-state"><span class="dot ${n.online ? 'online' : 'offline'}"></span>${n.online ? '在线' : '离线'}</div>
+      </div>`;
+    }).join('')}
+  </div>`;
+}
+
+function detailCards(n) {
+  if (!n) return '';
+  const m = n.latest || {};
+  const memP = pct(m.mem_used, m.mem_total);
+  const diskP = pct(m.disk_used, m.disk_total);
+  const diskWarn = state.alertOn && diskP >= (state.settings.disk_alert || 90);
+  return `<div class="split-grid">
+    <div class="card">
+      <div class="card-head">
+        <div><h2>系统信息</h2><p>${esc(n.name)} · ${esc(n.user)}@${esc(n.addr)}</p></div>
+        <div class="head-actions">
+          <button class="btn sm ghost" id="goTerminal">终端</button>
+          <button class="btn sm ghost" id="goContainers">容器</button>
         </div>
       </div>
-      <div class="card chart-card span-6">
-        <div class="chart-head"><span class="chart-title">内存</span><span class="chart-value">${m.mem_total ? memP.toFixed(1) : '-'}<small>%</small></span></div>
-        <div class="chart-wrap">${chartSVG([{ values: memSeries, color: 'var(--blue)', fill: true }], { max: 100 })}</div>
-        <div class="chart-legend"><span>${fmtBytes(m.mem_used)} / ${fmtBytes(m.mem_total)}</span>${m.swap_total ? `<span>Swap ${fmtBytes(m.swap_used)} / ${fmtBytes(m.swap_total)}</span>` : ''}</div>
+      ${!n.online && n.error ? `<div class="banner error">连接失败：${esc(n.error)}</div>` : ''}
+      <div class="info-list">
+        <div class="info-row"><span>主机名</span><span>${esc(m.hostname || '-')}</span></div>
+        <div class="info-row"><span>系统</span><span class="os-pill" title="${esc(m.os || '')}">${esc(m.os || '-')}</span></div>
+        <div class="info-row"><span>内核</span><span>${esc(m.kernel || '-')}</span></div>
+        <div class="info-row"><span>运行时间</span><span>${m.uptime ? fmtUptime(m.uptime) : '-'}</span></div>
+        <div class="info-row"><span>负载</span><span>${(Number(m.load1) || 0).toFixed(2)} / ${(Number(m.load5) || 0).toFixed(2)} / ${(Number(m.load15) || 0).toFixed(2)}</span></div>
+        <div class="info-row"><span>CPU 温度</span><span>${m.temp > 0 ? m.temp.toFixed(1) + ' °C' : '未检测到'}</span></div>
+        <div class="info-row"><span>Docker</span><span>${m.docker_total >= 0 ? `${m.docker_running} 运行 / ${m.docker_total} 个` : '未安装'}</span></div>
+        <div class="info-row"><span>内存</span><span>${m.mem_total ? `${fmtBytes(m.mem_used)} / ${fmtBytes(m.mem_total)} · ${memP.toFixed(0)}%` : '-'}</span></div>
       </div>
-      <div class="card chart-card span-6">
-        <div class="chart-head"><span class="chart-title">网络</span><span class="chart-value">${fmtRate(m.net_rx)}<small>↓ / ↑ ${fmtRate(m.net_tx)}</small></span></div>
-        <div class="chart-wrap">${chartSVG([
-          { values: rxSeries, color: 'var(--violet)' },
-          { values: txSeries, color: 'var(--pink)' },
-        ], { max: netMax })}</div>
-        <div class="chart-legend">
-          <span class="legend-item"><i class="legend-swatch" style="background:var(--violet)"></i>下载</span>
-          <span class="legend-item"><i class="legend-swatch" style="background:var(--pink)"></i>上传</span>
-        </div>
+      <div class="disk-block">
+        <div class="disk-head"><span>磁盘</span><span>${m.disk_total ? `${fmtBytes(m.disk_used)} / ${fmtBytes(m.disk_total)}` : '-'}</span></div>
+        <div class="bar-track"><div class="bar-fill ${diskWarn ? 'warn' : ''}" style="width:${diskP.toFixed(1)}%"></div></div>
+        <div class="disk-pct">${m.disk_total ? diskP.toFixed(1) + '%' : '-'}</div>
       </div>
-      <div class="card span-4">
-        <div class="chart-title" style="margin-bottom:12px">磁盘</div>
-        <div class="big-metric"><b>${m.disk_total ? diskP.toFixed(1) : '-'}</b><span>%</span></div>
-        <div class="bar-track" style="margin:10px 0 8px"><div class="bar-fill disk ${diskP >= state.settings.disk_alert ? 'warn' : ''}" style="width:${diskP.toFixed(1)}%"></div></div>
-        <div class="muted" style="font-size:12.5px">${fmtBytes(m.disk_used)} / ${fmtBytes(m.disk_total)}</div>
-        <div class="node-foot"><span>负载 ${(Number(m.load1) || 0).toFixed(2)} / ${(Number(m.load5) || 0).toFixed(2)} / ${(Number(m.load15) || 0).toFixed(2)}</span></div>
-        ${m.docker_error ? `<div class="muted" style="font-size:11.5px;margin-top:8px;color:var(--amber)">${esc(m.docker_error)}</div>` : ''}
+    </div>
+    <div class="card">
+      <div class="card-head">
+        <div><h2>进程 Top 10</h2><p>按 CPU 占用排序</p></div>
+        <span class="live-pill sm"><span class="live-dot"></span>${state.procOn ? '9 秒刷新' : '已暂停'}</span>
       </div>
-      <div class="card span-8">
-        <div class="chart-head"><span class="chart-title">进程 Top 10</span><span class="faint" style="font-size:11.5px">按 CPU 排序</span></div>
-        <div class="table-wrap">
-          <table class="table">
-            <thead><tr><th>进程</th><th style="text-align:right">CPU</th><th style="text-align:right">内存</th><th>运行时间</th></tr></thead>
-            <tbody id="procBody">${processRows(state.procNode === n.id ? state.processes : [])}</tbody>
-          </table>
-        </div>
+      <div class="table-wrap">
+        <table class="table">
+          <thead><tr><th>进程</th><th style="text-align:right">CPU</th><th style="text-align:right">内存</th><th>运行时间</th></tr></thead>
+          <tbody id="procBody">${processRows(state.procNode === n.id ? state.processes : [])}</tbody>
+        </table>
       </div>
-    </div>`;
+    </div>
+  </div>`;
 }
 
 function noNodeHTML(text) {
@@ -525,27 +753,149 @@ function drawOverview() {
   const page = $('#page');
   if (!page) return;
   const sel = currentNode();
+  const online = state.nodes.filter(n => n.online).length;
   page.innerHTML = `
     ${state.overviewError ? `<div class="banner error">${esc(state.overviewError)}</div>` : ''}
     <section class="page-head">
-      <div><h1>集群总览</h1><p class="page-sub">统一查看所有节点状态，点击节点卡片可切换当前管理对象</p></div>
-      <div class="head-actions"><span class="updated">每 3 秒自动刷新</span><button class="btn sm ghost" id="ovRefresh">刷新</button></div>
+      <div><h1>概览</h1><p class="page-sub">${todayCN()} · ${state.nodes.length ? `${online} / ${state.nodes.length} 台节点在线` : '尚未添加节点'}</p></div>
+      <div class="head-actions">
+        <button class="btn sm" id="ovRefresh">刷新</button>
+        <button class="btn sm primary" id="ovAddNode">${ico('plus', 'ico')}添加节点</button>
+      </div>
     </section>
-    ${state.nodes.length ? `<div class="node-grid">${state.nodes.map(nodeCard).join('')}</div>` : noNodeHTML()}
-    ${sel ? detailHTML(sel) : ''}`;
+    ${state.nodes.length ? statCards() + trendCard(sel) + nodesCard() + detailCards(sel) : noNodeHTML()}`;
 
   const refresh = $('#ovRefresh');
   if (refresh) refresh.addEventListener('click', () => loadOverview(true));
-  $$('.node-card[data-node]', page).forEach(card => {
-    const go = () => selectNode(card.dataset.node);
-    card.addEventListener('click', go);
-    card.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(); } });
+  const addNode = $('#ovAddNode');
+  if (addNode) addNode.addEventListener('click', () => openNodeForm(null));
+  const tabs = $('#trendTabs');
+  if (tabs) {
+    tabs.addEventListener('click', e => {
+      const btn = e.target.closest('[data-metric]');
+      if (!btn || btn.dataset.metric === state.trendMetric) return;
+      state.trendMetric = btn.dataset.metric;
+      drawOverview();
+    });
+  }
+  $$('.node-line[data-node]', page).forEach(row => {
+    const go = () => selectNode(row.dataset.node);
+    row.addEventListener('click', go);
+    row.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(); } });
   });
   const term = $('#goTerminal');
   if (term) term.addEventListener('click', () => navigate('terminal'));
   const cont = $('#goContainers');
   if (cont) cont.addEventListener('click', () => navigate('containers'));
   bindNoNode();
+}
+
+function renderRail() {
+  const rail = $('#rail');
+  if (!rail) return;
+  rail.innerHTML = `
+    <section class="rail-card">
+      <div class="rail-head"><b>节点快切</b><span id="railCount"></span></div>
+      <div class="rail-nodes" id="railNodes"></div>
+      <button class="rail-add" id="railAdd" type="button">+ 添加节点</button>
+    </section>
+    <section class="rail-card">
+      <div class="rail-head"><b>功能开关</b><span>偏好设置</span></div>
+      <label class="switch-row">
+        <span class="sw-main"><b>自动刷新</b><span>概览数据每 3 秒更新</span></span>
+        <span class="toggle"><input type="checkbox" id="prefAuto" ${state.autoRefresh ? 'checked' : ''}><i></i></span>
+      </label>
+      <label class="switch-row">
+        <span class="sw-main"><b>进程排行</b><span>定时拉取 Top 10 进程</span></span>
+        <span class="toggle"><input type="checkbox" id="prefProc" ${state.procOn ? 'checked' : ''}><i></i></span>
+      </label>
+      <label class="switch-row">
+        <span class="sw-main"><b>告警高亮</b><span>超过阈值时在概览提示</span></span>
+        <span class="toggle"><input type="checkbox" id="prefAlert" ${state.alertOn ? 'checked' : ''}><i></i></span>
+      </label>
+    </section>
+    <section class="rail-card">
+      <div class="rail-head"><b>最近操作</b><span id="railOpsCount"></span></div>
+      <div class="rail-ops" id="railOps"><div class="rail-empty">加载中…</div></div>
+    </section>`;
+  $('#railAdd').addEventListener('click', () => openNodeForm(null));
+  $('#prefAuto').addEventListener('change', e => {
+    state.autoRefresh = e.target.checked;
+    localStorage.setItem('kp_auto', state.autoRefresh ? '1' : '0');
+    restartOverviewTimers();
+    if (state.autoRefresh) loadOverview(true);
+  });
+  $('#prefProc').addEventListener('change', e => {
+    state.procOn = e.target.checked;
+    localStorage.setItem('kp_proc', state.procOn ? '1' : '0');
+    restartOverviewTimers();
+    if (state.procOn) loadProcesses();
+    else drawOverview();
+  });
+  $('#prefAlert').addEventListener('change', e => {
+    state.alertOn = e.target.checked;
+    localStorage.setItem('kp_alert', state.alertOn ? '1' : '0');
+    drawOverview();
+  });
+  updateRailNodes();
+  loadRailOps();
+}
+
+function updateRailNodes() {
+  const host = $('#railNodes');
+  if (!host) return;
+  const count = $('#railCount');
+  if (count) count.textContent = `${state.nodes.length} 台`;
+  if (!state.nodes.length) {
+    host.innerHTML = `<div class="rail-empty">尚未添加节点</div>`;
+    return;
+  }
+  host.innerHTML = state.nodes.map(n => `
+    <button type="button" class="acct-item ${n.id === state.selected ? 'active' : ''}" data-node="${esc(n.id)}">
+      <span class="avatar" style="background:${avatarColor(n.id)}">${esc(initialOf(n.name))}</span>
+      <span class="acct-main"><b>${esc(n.name)}${n.id === state.selected ? '<span class="tag-soft">当前</span>' : ''}</b><span>${esc(n.user)}@${esc(n.addr)}</span></span>
+      <span class="acct-state"><span class="dot ${n.online ? 'online' : 'offline'}"></span>${n.online ? '在线' : '离线'}</span>
+    </button>`).join('');
+  host.onclick = e => {
+    const btn = e.target.closest('[data-node]');
+    if (btn) selectNode(btn.dataset.node);
+  };
+}
+
+async function loadRailOps() {
+  const host = $('#railOps');
+  if (!host) return;
+  try {
+    if (!state.audit.length || Date.now() - state.auditAt > 20000) {
+      const d = await api('/api/audit?limit=5');
+      state.audit = d.entries || [];
+      state.auditAt = Date.now();
+    }
+    const list = state.audit.slice(-4).reverse();
+    const count = $('#railOpsCount');
+    if (count) count.textContent = state.audit.length ? `${state.audit.length} 条` : '';
+    if (!list.length) { host.innerHTML = `<div class="rail-empty">暂无操作记录</div>`; return; }
+    host.innerHTML = list.map(en => {
+      const time = String(en.time || '');
+      return `<div class="op-row">
+        <span class="op-main"><b>${esc(en.action)}</b><span>${esc(en.detail || '')}</span></span>
+        <span class="op-right"><span class="chip done">完成</span><span class="op-time">${esc(time.slice(11, 19) || time)}</span></span>
+      </div>`;
+    }).join('');
+  } catch (e) {
+    host.innerHTML = `<div class="rail-empty">${esc(e.message)}</div>`;
+  }
+}
+
+function processRows(list) {
+  if (!list || !list.length) return `<tr><td colspan="4" class="muted">暂无数据</td></tr>`;
+  return list.slice(0, 10).map(p => `
+    <tr>
+      <td><span class="proc-comm">${esc(p.comm)}</span> <span class="faint">#${esc(p.pid)}</span></td>
+      <td class="num">${(Number(p.cpu) || 0).toFixed(1)}%</td>
+      <td class="num">${(Number(p.mem) || 0).toFixed(1)}%</td>
+      <td class="faint">${esc(p.elapsed)}</td>
+    </tr>`).join('');
 }
 
 async function loadProcesses() {
@@ -596,7 +946,7 @@ function renderContainers() {
   page.innerHTML = `
     <section class="page-head">
       <div><h1>容器</h1><p class="page-sub">${esc(n.name)} · ${esc(n.addr)}</p></div>
-      <div class="head-actions"><button class="btn sm ghost" id="ctrRefresh">刷新</button></div>
+      <div class="head-actions"><button class="btn sm" id="ctrRefresh">刷新</button></div>
     </section>
     <div id="ctrError" class="banner error hidden"></div>
     <div class="filterbar">
@@ -827,7 +1177,7 @@ function renderApps() {
     <section class="page-head">
       <div><h1>应用</h1><p class="page-sub">${esc(n.name)} · Compose 应用与一键模板</p></div>
       <div class="head-actions">
-        <button class="btn sm ghost" id="stacksRefresh">刷新</button>
+        <button class="btn sm" id="stacksRefresh">刷新</button>
         <button class="btn sm primary" id="newStack">新建应用</button>
       </div>
     </section>
@@ -1066,7 +1416,7 @@ function renderFiles() {
   page.innerHTML = `
     <section class="page-head">
       <div><h1>文件</h1><p class="page-sub">${esc(n.name)} · 根目录 ${esc(n.file_root || '/')}</p></div>
-      <div class="head-actions"><button class="btn sm ghost" id="fileRefresh">刷新</button></div>
+      <div class="head-actions"><button class="btn sm" id="fileRefresh">刷新</button></div>
     </section>
     <div id="fileError" class="banner error hidden"></div>
     <div class="filterbar">
@@ -1351,7 +1701,7 @@ function renderTerminalPage() {
     <section class="page-head">
       <div><h1>终端</h1><p class="page-sub">${esc(n.name)} · ${esc(n.user)}@${esc(n.addr)}</p></div>
       <div class="head-actions">
-        <button class="btn sm ghost" id="termReconnect">重新连接</button>
+        <button class="btn sm" id="termReconnect">重新连接</button>
         <button class="btn sm ghost" id="termClear">清屏</button>
       </div>
     </section>
@@ -1572,6 +1922,7 @@ async function loadAudit() {
   try {
     const d = await api('/api/audit?limit=200');
     state.audit = d.entries || [];
+    state.auditAt = Date.now();
     if (!state.audit.length) { host.innerHTML = `<div class="muted">暂无记录</div>`; return; }
     host.innerHTML = state.audit.slice().reverse().map(en => `
       <div class="audit-row">
