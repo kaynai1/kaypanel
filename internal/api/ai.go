@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
@@ -298,7 +299,11 @@ func hasLine(out, want string) bool {
 	return false
 }
 
+var ansiRe = regexp.MustCompile(`\x1b\[[0-9;?]*[ -/]*[@-~]`)
+
 func clipOutput(s string) string {
+	s = ansiRe.ReplaceAllString(s, "")
+	s = strings.ReplaceAll(s, "\r", "")
 	s = strings.TrimSpace(s)
 	if s == "" {
 		return "（无输出）"
