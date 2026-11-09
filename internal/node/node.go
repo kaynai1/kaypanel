@@ -218,6 +218,24 @@ func (m *Manager) Test(id string) TestResult {
 		m.store.SetNodeHostKey(id, fp)
 	})
 	defer client.Close()
+	if cfg.SFTPOnly {
+		sf, err := client.SFTP()
+		if err != nil {
+			tr.Error = err.Error()
+			return tr
+		}
+		root := cfg.FileRoot
+		if root == "" {
+			root = "/"
+		}
+		if _, err := sf.Stat(root); err != nil {
+			tr.Error = fmt.Sprintf("SFTP 登录成功，但无法访问根目录 %s: %v", root, err)
+			return tr
+		}
+		tr.OK = true
+		tr.Docker = "虚拟主机不支持"
+		return tr
+	}
 	script := `printf 'host='; hostname 2>/dev/null
 printf 'kernel='; uname -r 2>/dev/null
 printf 'os='; (. /etc/os-release 2>/dev/null && printf '%s' "$PRETTY_NAME")
@@ -475,6 +493,22 @@ func (n *Node) run() {
 		if n.ctx.Err() != nil {
 			return
 		}
+		if n.Config().SFTPOnly {
+			err := n.sftpProbe()
+			wait := 30 * time.Second
+			if err != nil {
+				n.setOffline(err)
+				wait = 12 * time.Second
+			} else {
+				n.markOnline()
+			}
+			select {
+			case <-n.ctx.Done():
+				return
+			case <-time.After(wait):
+			}
+			continue
+		}
 		err := n.sample()
 		if err != nil {
 			if attempted, werr := n.tryWake(); attempted {
@@ -500,6 +534,34 @@ func (n *Node) run() {
 		case <-time.After(wait):
 		}
 	}
+}
+
+func (n *Node) sftpProbe() error {
+	client, err := n.Client()
+	if err != nil {
+		return err
+	}
+	sf, err := client.SFTP()
+	if err != nil {
+		client.Close()
+		return err
+	}
+	root := n.Config().FileRoot
+	if root == "" {
+		root = "/"
+	}
+	if _, err := sf.Stat(root); err != nil {
+		client.Close()
+		return fmt.Errorf("无法访问根目录 %s: %v", root, err)
+	}
+	return nil
+}
+
+func (n *Node) markOnline() {
+	n.mu.Lock()
+	n.online = true
+	n.errMsg = ""
+	n.mu.Unlock()
 }
 
 func (n *Node) tryWake() (bool, error) {

@@ -416,6 +416,7 @@ type nodeReq struct {
 	Sudo         bool   `json:"sudo"`
 	SudoPassword string `json:"sudo_password"`
 	SkipHostKey  bool   `json:"skip_host_key"`
+	SFTPOnly     bool   `json:"sftp_only"`
 	AutoWake     bool   `json:"auto_wake"`
 	IBAPIKey     string `json:"instabox_api_key"`
 	IBMachineID  string `json:"instabox_machine_id"`
@@ -447,6 +448,7 @@ func (n nodeReq) config() config.Node {
 		Sudo:         n.Sudo,
 		SudoPassword: n.SudoPassword,
 		SkipHostKey:  n.SkipHostKey,
+		SFTPOnly:     n.SFTPOnly,
 		AutoWake:     n.AutoWake,
 		IBAPIKey:     n.IBAPIKey,
 		IBMachineID:  n.IBMachineID,

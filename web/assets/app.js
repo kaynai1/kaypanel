@@ -262,7 +262,7 @@ function renderShell() {
     <div class="main-col">
       <header class="topbar">
         <div class="node-switch" id="nodeSwitchWrap"></div>
-        <div class="live-pill"><span class="live-dot"></span>实时监控</div>
+        <div class="live-pill"><span class="live-dot"></span><span id="liveText">实时监控</span></div>
         <div class="top-right">
           <button class="icon-btn" id="topRefresh" title="刷新当前页">${ico('refresh')}</button>
           ${state.desktop ? '' : `<button class="icon-btn" id="logoutBtn" title="退出登录">${ico('logout')}</button>`}
@@ -319,7 +319,15 @@ function refreshCurrentPage() {
 }
 
 function updateTabs() {
-  $$('.nav-item').forEach(t => t.classList.toggle('active', t.dataset.page === state.page));
+  const sel = currentNode();
+  const vhost = !!(sel && sel.sftp_only);
+  $$('.nav-item').forEach(t => {
+    const hide = vhost && ['containers', 'apps', 'terminal'].includes(t.dataset.page);
+    t.classList.toggle('hidden', hide);
+    t.classList.toggle('active', t.dataset.page === state.page);
+  });
+  const live = $('#liveText');
+  if (live) live.textContent = vhost ? '仅文件管理' : '实时监控';
 }
 
 function nodeDotClass(n) {
@@ -390,6 +398,7 @@ function selectNode(id) {
   state.processes = [];
   state.procNode = '';
   closeNodeMenu();
+  updateTabs();
   updateNodePills();
   if (state.page === 'overview' && !state.subview) {
     drawOverview();
@@ -409,6 +418,11 @@ function cleanupPage() {
 
 function renderPage() {
   cleanupPage();
+  const selNode = currentNode();
+  if (selNode && selNode.sftp_only && ['containers', 'apps', 'terminal'].includes(state.page)) {
+    state.page = 'files';
+    if (location.hash !== '#/files') history.replaceState(null, '', '#/files');
+  }
   updateTabs();
   updateNodePills();
   syncRail();
@@ -478,7 +492,8 @@ async function refreshNodesLight() {
 
 function renderOverview() {
   drawOverview();
-  loadProcesses();
+  const sel = currentNode();
+  if (!sel || !sel.sftp_only) loadProcesses();
   restartOverviewTimers();
 }
 
@@ -486,8 +501,9 @@ function restartOverviewTimers() {
   if (state.page !== 'overview' || state.subview) return;
   if (state.pageTimer) { clearInterval(state.pageTimer); state.pageTimer = null; }
   if (state.procTimer) { clearInterval(state.procTimer); state.procTimer = null; }
+  const sel = currentNode();
   if (state.autoRefresh) state.pageTimer = setInterval(() => loadOverview(true), 3000);
-  if (state.procOn) state.procTimer = setInterval(loadProcesses, 9000);
+  if (state.procOn && (!sel || !sel.sftp_only)) state.procTimer = setInterval(loadProcesses, 9000);
 }
 
 let chartSeq = 0;
@@ -539,7 +555,7 @@ function chartSVG(series, opts = {}) {
 function statCards() {
   const nodes = state.nodes;
   const online = nodes.filter(n => n.online);
-  const latest = online.map(n => n.latest || {});
+  const latest = online.filter(n => !n.sftp_only).map(n => n.latest || {});
   const dockerNodes = latest.filter(m => Number(m.docker_total) >= 0);
   const dockerRunning = dockerNodes.reduce((a, m) => a + Math.max(0, Number(m.docker_running) || 0), 0);
   const dockerTotal = dockerNodes.reduce((a, m) => a + Math.max(0, Number(m.docker_total) || 0), 0);
@@ -684,11 +700,11 @@ function nodesCard() {
         <div class="nl-name">
           <span class="avatar" style="background:${avatarColor(n.id)}">${esc(initialOf(n.name))}</span>
           <div class="nl-main">
-            <b>${esc(n.name)}${n.id === state.selected ? '<span class="tag-soft">当前</span>' : ''}${alerts.length ? `<span class="alert-chip">${esc(alerts[0])}</span>` : ''}</b>
-            <span>${esc(n.user)}@${esc(n.addr)} · ${esc(m.os || '未知系统')}</span>
+            <b>${esc(n.name)}${n.id === state.selected ? '<span class="tag-soft">当前</span>' : ''}${n.sftp_only ? '<span class="tag-soft">仅文件</span>' : ''}${alerts.length ? `<span class="alert-chip">${esc(alerts[0])}</span>` : ''}</b>
+            <span>${n.sftp_only ? `虚拟主机 · ${esc(n.file_root || '/')}` : `${esc(n.user)}@${esc(n.addr)} · ${esc(m.os || '未知系统')}`}</span>
           </div>
         </div>
-        <div class="nl-metric">${n.online ? (Number(m.cpu) || 0).toFixed(1) + '%' : '—'}<span>CPU</span></div>
+        <div class="nl-metric">${n.sftp_only ? '—' : n.online ? (Number(m.cpu) || 0).toFixed(1) + '%' : '—'}<span>CPU</span></div>
         <div class="nl-metric">${m.mem_total ? memP.toFixed(0) + '%' : '—'}<span>内存</span></div>
         <div class="nl-metric">${m.disk_total ? diskP.toFixed(0) + '%' : '—'}<span>磁盘</span></div>
         <div class="nl-state"><span class="dot ${nodeDotClass(n)}"></span>${nodeStateText(n)}</div>
@@ -757,6 +773,25 @@ function bindNoNode() {
   if (btn) btn.addEventListener('click', () => openNodeForm(null));
 }
 
+function vhostCard(n) {
+  return `<div class="card">
+    <div class="card-head">
+      <div><h2>虚拟主机</h2><p>${esc(n.name)} · ${esc(n.user)}@${esc(n.addr)}</p></div>
+      <div class="head-actions">
+        <button class="btn sm primary" id="goVhostFiles">文件管理</button>
+        <button class="btn sm ghost" id="editVhost">编辑节点</button>
+      </div>
+    </div>
+    ${!n.online && n.error ? `<div class="banner error">连接失败：${esc(n.error)}</div>` : ''}
+    <div class="info-list">
+      <div class="info-row"><span>节点类型</span><span>虚拟主机 · 仅文件管理</span></div>
+      <div class="info-row"><span>文件根目录</span><span class="mono">${esc(n.file_root || '/')}</span></div>
+      <div class="info-row"><span>连接状态</span><span>${nodeStateText(n)}</span></div>
+      <div class="info-row"><span>说明</span><span>通过 SFTP 连接，不提供系统监控、容器、终端和应用部署。</span></div>
+    </div>
+  </div>`;
+}
+
 function drawOverview() {
   const page = $('#page');
   if (!page) return;
@@ -771,7 +806,7 @@ function drawOverview() {
         <button class="btn sm primary" id="ovAddNode">${ico('plus', 'ico')}添加节点</button>
       </div>
     </section>
-    ${state.nodes.length ? statCards() + trendCard(sel) + nodesCard() + detailCards(sel) : noNodeHTML()}`;
+    ${state.nodes.length ? (sel && sel.sftp_only ? vhostCard(sel) + nodesCard() : statCards() + trendCard(sel) + nodesCard() + detailCards(sel)) : noNodeHTML()}`;
 
   const refresh = $('#ovRefresh');
   if (refresh) refresh.addEventListener('click', () => loadOverview(true));
@@ -795,6 +830,10 @@ function drawOverview() {
   if (term) term.addEventListener('click', () => navigate('terminal'));
   const cont = $('#goContainers');
   if (cont) cont.addEventListener('click', () => navigate('containers'));
+  const vfiles = $('#goVhostFiles');
+  if (vfiles) vfiles.addEventListener('click', () => navigate('files'));
+  const vedit = $('#editVhost');
+  if (vedit && sel) vedit.addEventListener('click', () => openNodeForm(sel.id));
   bindNoNode();
 }
 
@@ -862,7 +901,7 @@ function updateRailNodes() {
     <button type="button" class="acct-item ${n.id === state.selected ? 'active' : ''}" data-node="${esc(n.id)}">
       <span class="avatar" style="background:${avatarColor(n.id)}">${esc(initialOf(n.name))}</span>
       <span class="acct-main"><b>${esc(n.name)}${n.id === state.selected ? '<span class="tag-soft">当前</span>' : ''}</b><span>${esc(n.user)}@${esc(n.addr)}</span></span>
-      <span class="acct-state"><span class="dot ${n.online ? 'online' : 'offline'}"></span>${n.online ? '在线' : '离线'}</span>
+      <span class="acct-state"><span class="dot ${nodeDotClass(n)}"></span>${nodeStateText(n)}</span>
     </button>`).join('');
   host.onclick = e => {
     const btn = e.target.closest('[data-node]');
@@ -2030,6 +2069,14 @@ function renderNodeForm(sub) {
         <button class="btn sm" id="sshScanBtn" type="button">识别本机 SSH</button>
       </div>
       <div class="form-grid">
+        <div class="field full">
+          <label>节点类型</label>
+          <div class="radio-row">
+            <label><input type="radio" name="nodeMode" value="server" ${!n || !n.sftp_only ? 'checked' : ''}> Linux 服务器（SSH）</label>
+            <label><input type="radio" name="nodeMode" value="vhost" ${n && n.sftp_only ? 'checked' : ''}> 虚拟主机（仅文件）</label>
+          </div>
+          <div class="hint hidden" id="vhostHint">虚拟主机通过 SFTP 登录，只启用文件管理；系统监控、容器、终端和应用部署不可用。</div>
+        </div>
         <div class="field"><label>节点名称</label><input type="text" id="nodeName" value="${esc(n ? n.name : '')}" placeholder="如 kaynai NAS"></div>
         <div class="field"><label>SSH 地址</label><input type="text" id="nodeAddr" value="${esc(n ? n.addr : '')}" placeholder="192.168.5.50:22"></div>
         <div class="field"><label>SSH 用户名</label><input type="text" id="nodeUser" value="${esc(n ? n.user : '')}" placeholder="root"></div>
@@ -2064,7 +2111,7 @@ function renderNodeForm(sub) {
           <label class="check-row"><input type="checkbox" id="nodeSkipHostKey" ${n && n.skip_host_key ? 'checked' : ''}> 跳过主机指纹校验</label>
           <div class="hint">仅用于 Instabox 这类每次连接指纹都会变化的主机；开启后不再校验主机身份。</div>
         </div>
-        <div class="field full">
+        <div class="field full" id="autoWakeField">
           <label class="check-row"><input type="checkbox" id="nodeAutoWake" ${n && n.auto_wake ? 'checked' : ''}> Instabox 自动唤醒</label>
           <div class="hint">面板运行期间定期续租防止空闲休眠；机器已休眠时自动调用 Instabox 官方接口唤醒，约 1 分钟内重新上线。</div>
         </div>
@@ -2083,8 +2130,8 @@ function renderNodeForm(sub) {
           <div class="hint">点「读取机器列表」会用上面的 Key 查询账号下的机器，选中后自动填入 ID。</div>
         </div>
         <div class="field"><label>文件根目录</label><input type="text" id="nodeFileRoot" value="${esc(n ? n.file_root : '/')}" placeholder="/ 或 /vol1"></div>
-        <div class="field"><label>Compose 应用目录</label><input type="text" id="nodeStacksDir" value="${esc(n ? n.stacks_dir : '')}" placeholder="留空使用 ~/kaypanel/stacks"></div>
-        <div class="field full">
+        <div class="field" id="stacksDirField"><label>Compose 应用目录</label><input type="text" id="nodeStacksDir" value="${esc(n ? n.stacks_dir : '')}" placeholder="留空使用 ~/kaypanel/stacks"></div>
+        <div class="field full" id="sudoToggleField">
           <label class="check-row"><input type="checkbox" id="nodeSudo" ${n && n.sudo ? 'checked' : ''}> Docker 命令使用 sudo</label>
           <div class="hint">如果当前用户在 docker 组里则不需要；需要密码时请在下方填写 sudo 密码</div>
         </div>
@@ -2126,6 +2173,24 @@ function renderNodeForm(sub) {
   };
   $('#nodeAutoWake').addEventListener('change', syncWake);
   syncWake();
+
+  const syncMode = () => {
+    const vhost = $('input[name=nodeMode]:checked').value === 'vhost';
+    $('#vhostHint').classList.toggle('hidden', !vhost);
+    $('#stacksDirField').classList.toggle('hidden', vhost);
+    $('#sudoToggleField').classList.toggle('hidden', vhost);
+    $('#autoWakeField').classList.toggle('hidden', vhost);
+    if (vhost) {
+      $('#sudoField').classList.add('hidden');
+      $('#ibKeyField').classList.add('hidden');
+      $('#ibMachineField').classList.add('hidden');
+    } else {
+      syncSudo();
+      syncWake();
+    }
+  };
+  $$('input[name=nodeMode]').forEach(r => r.addEventListener('change', syncMode));
+  syncMode();
 
   $('#ibMachinesBtn').addEventListener('click', async () => {
     const btn = $('#ibMachinesBtn');
@@ -2213,6 +2278,7 @@ function renderNodeForm(sub) {
     sudo: $('#nodeSudo').checked,
     sudo_password: $('#nodeSudoPwd').value,
     skip_host_key: $('#nodeSkipHostKey').checked,
+    sftp_only: $('input[name=nodeMode]:checked').value === 'vhost',
     auto_wake: $('#nodeAutoWake').checked,
     instabox_api_key: $('#nodeIBKey').value.trim(),
     instabox_machine_id: $('#nodeIBMachine').value.trim(),

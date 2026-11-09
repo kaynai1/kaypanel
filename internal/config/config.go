@@ -27,6 +27,7 @@ type Node struct {
 	StacksDir    string `yaml:"stacks_dir" json:"stacks_dir"`
 	HostKey      string `yaml:"host_key,omitempty" json:"host_key"`
 	SkipHostKey  bool   `yaml:"skip_host_key,omitempty" json:"skip_host_key"`
+	SFTPOnly     bool   `yaml:"sftp_only,omitempty" json:"sftp_only"`
 	AutoWake     bool   `yaml:"auto_wake,omitempty" json:"auto_wake"`
 	IBAPIKey     string `yaml:"instabox_api_key,omitempty" json:"-"`
 	IBMachineID  string `yaml:"instabox_machine_id,omitempty" json:"instabox_machine_id"`
