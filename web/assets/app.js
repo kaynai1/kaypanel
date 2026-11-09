@@ -232,6 +232,11 @@ function renderShell() {
 
 function updateTabs() {
   $$('.tab').forEach(t => t.classList.toggle('active', t.dataset.page === state.page));
+  const tabs = $('#tabs');
+  const active = tabs && tabs.querySelector('.tab.active');
+  if (tabs && active && tabs.scrollWidth > tabs.clientWidth) {
+    active.scrollIntoView({ inline: 'center', block: 'nearest' });
+  }
 }
 
 function updateNodePills() {
