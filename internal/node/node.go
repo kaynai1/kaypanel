@@ -236,6 +236,15 @@ printf 'docker='; (docker version --format '{{.Server.Version}}' 2>&1 | head -n1
 		case "cores":
 			tr.Cores = v
 		case "docker":
+			v = strings.TrimSpace(v)
+			switch {
+			case strings.Contains(v, "not found"), strings.Contains(v, "No such file"):
+				v = "未安装 Docker"
+			case strings.Contains(v, "permission denied"):
+				v = "无权限访问 Docker（请开启 sudo）"
+			case strings.Contains(v, "Cannot connect"):
+				v = "Docker 服务未运行"
+			}
 			tr.Docker = v
 		}
 	}
