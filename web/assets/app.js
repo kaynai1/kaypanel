@@ -2253,12 +2253,21 @@ function renderSettings() {
     <div class="settings-grid">
       <div class="card settings-card" id="setThresholds">
         ${settingHead('activity', '告警阈值', '超过阈值时节点卡片高亮，并可通过 Webhook 推送')}
-        <div class="form-grid">
+        <div class="form-grid three">
           <div class="field"><label>CPU %</label><input type="number" id="thCpu" min="1" max="100" value="${Number(state.settings.cpu_alert) || 90}"></div>
           <div class="field"><label>内存 %</label><input type="number" id="thMem" min="1" max="100" value="${Number(state.settings.mem_alert) || 90}"></div>
           <div class="field"><label>磁盘 %</label><input type="number" id="thDisk" min="1" max="100" value="${Number(state.settings.disk_alert) || 90}"></div>
         </div>
         <button class="btn" id="saveThresholds">保存阈值</button>
+      </div>
+      <div class="card settings-card" id="setPwd">
+        ${settingHead('key', '修改密码', state.desktop ? '桌面版已自动登录；设置密码后也可在本机浏览器中登录' : '密码用于登录面板，不会修改服务器 SSH 密码')}
+        <div class="form-grid">
+          ${state.desktop ? '' : '<div class="field full"><label>当前密码</label><input type="password" id="pwdOld" autocomplete="current-password"></div>'}
+          <div class="field"><label>新密码</label><input type="password" id="pwdNew" autocomplete="new-password"></div>
+          <div class="field"><label>确认新密码</label><input type="password" id="pwdNew2" autocomplete="new-password"></div>
+        </div>
+        <button class="btn" id="savePassword">更新密码</button>
       </div>
       <div class="card settings-card" id="setNotify">
         ${settingHead('bell', '通知推送', '支持企业微信、钉钉、飞书、Bark、Server酱、PushPlus、ntfy、Gotify、Telegram、Slack、Discord 与自定义 Webhook，阈值告警只推一次、恢复时再通知')}
@@ -2288,19 +2297,11 @@ function renderSettings() {
               <button class="btn sm ghost" id="aiDetect" type="button" title="从 Base URL 拉取可用模型列表">自动检测</button>
             </div>
             <datalist id="aiModelList"></datalist>
+            <div class="hint" id="aiDetectHint"></div>
           </div>
           <div class="field"><label>API Key</label><input type="password" id="aiKey" autocomplete="new-password" placeholder="${state.hasAIKey ? '已配置，留空保持不变' : 'sk-...'}"></div>
         </div>
         <button class="btn" id="saveAI">保存 AI 设置</button>
-      </div>
-      <div class="card settings-card" id="setPwd">
-        ${settingHead('key', '修改密码', state.desktop ? '桌面版已自动登录；设置密码后也可在本机浏览器中登录' : '密码用于登录面板，不会修改服务器 SSH 密码')}
-        <div class="form-grid">
-          ${state.desktop ? '' : '<div class="field full"><label>当前密码</label><input type="password" id="pwdOld" autocomplete="current-password"></div>'}
-          <div class="field"><label>新密码</label><input type="password" id="pwdNew" autocomplete="new-password"></div>
-          <div class="field"><label>确认新密码</label><input type="password" id="pwdNew2" autocomplete="new-password"></div>
-        </div>
-        <button class="btn" id="savePassword">更新密码</button>
       </div>
       <div class="card settings-card full" id="setNodes">
         ${settingHead('server', '节点管理', '通过 SSH 纳管服务器，无需在目标机器安装 Agent')}
@@ -2343,6 +2344,7 @@ function renderSettings() {
       const d = await api('/api/ai/models', { method: 'POST', body: JSON.stringify({ base_url: base, api_key: key }) });
       const models = (d && d.models) || [];
       $('#aiModelList').innerHTML = models.map(m => `<option value="${esc(m)}"></option>`).join('');
+      $('#aiDetectHint').textContent = `已检测到 ${models.length} 个模型，点击模型输入框可从列表选择`;
       const cur = $('#aiModel').value.trim();
       const pick = !cur || !models.includes(cur) ? pickModel(models) : '';
       if (pick) $('#aiModel').value = pick;

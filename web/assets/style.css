@@ -637,6 +637,7 @@ button { cursor: pointer; }
 /* ---------- forms ---------- */
 
 .form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 13px; }
+.form-grid.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .form-grid .full { grid-column: 1 / -1; }
 .field { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
 .field > label { color: var(--muted); font-size: 13px; }
@@ -653,6 +654,8 @@ button { cursor: pointer; }
 .model-row { display: flex; align-items: center; gap: 7px; }
 .model-row input { flex: 1; min-width: 0; }
 .model-row .btn { height: 36px; flex: none; }
+#aiDetectHint:empty { display: none; }
+@media (max-width: 560px) { .form-grid.three { grid-template-columns: 1fr; } }
 .field textarea { height: auto; padding: 9px 11px; resize: vertical; }
 .field input:focus, .field select:focus, .field textarea:focus { border-color: var(--accent); background: #fff; box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.09); }
 .field .hint { color: var(--faint); font-size: 12px; line-height: 1.55; }
