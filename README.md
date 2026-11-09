@@ -1,6 +1,6 @@
 # KayPanel
 
-轻量级多服务器管理面板：一个二进制文件，通过 SSH 统一管理多台 Linux 主机，无需在目标机器上安装任何 Agent。
+轻量级多服务器管理面板：一个二进制文件，通过 SSH 统一管理多台 Linux 主机，无需在目标机器上安装任何 Agent。提供 Windows 桌面版安装包，也可以部署为网页服务。
 
 ## 功能
 
@@ -16,7 +16,11 @@
 
 ## 快速开始
 
-### 方式一：下载二进制
+### 方式一：Windows 桌面版（推荐）
+
+从 [Releases](https://github.com/kaynai1/kaypanel/releases) 下载 `KayPanel-Setup-*.exe`，双击安装后从桌面或开始菜单启动。桌面版内嵌 WebView2，启动即自动登录，数据保存在 `%APPDATA%\KayPanel`，无需浏览器、无需命令行。
+
+### 方式二：下载二进制
 
 从 [Releases](https://github.com/kaynai1/kaypanel/releases) 下载对应平台的文件，直接运行：
 
@@ -26,7 +30,7 @@ KAYPANEL_PASSWORD='你的管理密码' ./kaypanel -listen :8899
 
 不设置 `KAYPANEL_PASSWORD` 时，首次启动会生成随机密码并打印在日志中。配置文件默认位于 `data/config.yaml`。
 
-### 方式二：Docker
+### 方式三：Docker
 
 ```bash
 docker load < kaypanel-image-amd64.tar.gz
@@ -37,7 +41,7 @@ docker compose up -d
 
 > 面板通过 SSH 管理节点，容器内需要能访问目标机器的 22 端口。管理本机时，节点地址填 `host.docker.internal`（Linux 下可加 `extra_hosts: ["host.docker.internal:host-gateway"]`）或宿主机内网 IP。
 
-### 方式三：源码构建
+### 方式四：源码构建
 
 ```bash
 go build -o kaypanel .
@@ -48,6 +52,8 @@ go build -o kaypanel .
 
 登录后进入「设置」→「添加节点」，填写地址、SSH 端口、用户名与密钥/密码。首次连接会显示主机指纹，确认后固定保存；后续指纹变化将拒绝连接。
 
+添加节点页支持**识别本机 SSH**：自动读取当前电脑（桌面版）或面板所在服务器（网页版）的 `~/.ssh/config`、`known_hosts` 和私钥，选择条目即可填入地址、用户和私钥，无需手工粘贴。私钥仅在保存时由本机读取，不会显示在页面中。
+
 - 文件根目录：面板可访问的目录，默认 `/`
 - 应用目录：Compose 应用存放位置，默认 `~/kaypanel/stacks`
 - sudo：需要执行 Docker 等特权命令时开启（建议使用密钥 + 免密 sudo，或单独填写 sudo 密码）
@@ -57,7 +63,6 @@ go build -o kaypanel .
 | 环境变量 | 说明 |
 | --- | --- |
 | `KAYPANEL_PASSWORD` | 首次初始化时设置管理员密码 |
-| `KAYPANEL_LISTEN` | 监听地址，默认 `:8080`（可用 `-listen` 覆盖） |
 
 命令行参数：`-config` 指定配置文件，`-listen` 指定监听地址，`-version` 输出版本。
 

@@ -7,3 +7,5 @@ runs.json
 rel.json
 .DS_Store
 node_modules/
+build/
+installer/Output/

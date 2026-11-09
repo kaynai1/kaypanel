@@ -6,6 +6,7 @@ const $$ = (sel, el = document) => Array.from(el.querySelectorAll(sel));
 
 const state = {
   authed: false,
+  desktop: false,
   version: '',
   settings: { cpu_alert: 90, mem_alert: 90, disk_alert: 90 },
   nodes: [],
@@ -205,7 +206,7 @@ function renderShell() {
       </nav>
       <div class="top-right">
         <span class="ver">${esc(state.version || 'dev')}</span>
-        <button class="btn-logout" id="logoutBtn">退出</button>
+        ${state.desktop ? '' : '<button class="btn-logout" id="logoutBtn">退出</button>'}
       </div>
     </header>
     <div class="subbar">
@@ -222,10 +223,12 @@ function renderShell() {
     const btn = e.target.closest('[data-node]');
     if (btn) selectNode(btn.dataset.node);
   });
-  $('#logoutBtn').addEventListener('click', async () => {
-    try { await api('/api/logout', { method: 'POST', body: '{}' }); } catch (e) {}
-    location.reload();
-  });
+  if ($('#logoutBtn')) {
+    $('#logoutBtn').addEventListener('click', async () => {
+      try { await api('/api/logout', { method: 'POST', body: '{}' }); } catch (e) {}
+      location.reload();
+    });
+  }
   updateTabs();
   updateNodePills();
 }
@@ -1448,9 +1451,9 @@ function renderSettings() {
       </div>
       <div class="card settings-card">
         <h2>修改密码</h2>
-        <p class="sub">密码用于登录面板，不会修改服务器 SSH 密码</p>
+        <p class="sub">${state.desktop ? '桌面版已自动登录；设置密码后也可在本机浏览器中登录' : '密码用于登录面板，不会修改服务器 SSH 密码'}</p>
         <div class="form-grid">
-          <div class="field full"><label>当前密码</label><input type="password" id="pwdOld" autocomplete="current-password"></div>
+          ${state.desktop ? '' : '<div class="field full"><label>当前密码</label><input type="password" id="pwdOld" autocomplete="current-password"></div>'}
           <div class="field"><label>新密码</label><input type="password" id="pwdNew" autocomplete="new-password"></div>
           <div class="field"><label>确认新密码</label><input type="password" id="pwdNew2" autocomplete="new-password"></div>
         </div>
@@ -1473,7 +1476,7 @@ function renderSettings() {
         <p class="sub">KayPanel ${esc(state.version || 'dev')} · 单二进制多机面板 · SSH 架构，无 Agent</p>
         <div class="info-list">
           <div class="info-row"><span>当前节点</span><span>${state.nodes.length} 台</span></div>
-          <div class="info-row"><span>数据目录</span><span>data/（config.yaml、audit.log）</span></div>
+          <div class="info-row"><span>数据目录</span><span>${state.desktop ? 'AppData\\Roaming\\KayPanel' : 'data/'}（config.yaml、audit.log）</span></div>
           <div class="info-row"><span>项目仓库</span><span><a href="https://github.com/kaynai1/kaypanel" target="_blank" rel="noreferrer">github.com/kaynai1/kaypanel</a></span></div>
         </div>
       </div>
@@ -1491,13 +1494,14 @@ function renderSettings() {
     } catch (e) { toast(e.message, 'error'); }
   });
   $('#savePassword').addEventListener('click', async () => {
-    const oldPwd = $('#pwdOld').value, newPwd = $('#pwdNew').value, newPwd2 = $('#pwdNew2').value;
+    const oldPwd = $('#pwdOld') ? $('#pwdOld').value : '', newPwd = $('#pwdNew').value, newPwd2 = $('#pwdNew2').value;
     if (newPwd.length < 8) { toast('新密码至少 8 位', 'error'); return; }
     if (newPwd !== newPwd2) { toast('两次输入的新密码不一致', 'error'); return; }
     try {
       await api('/api/password', { method: 'POST', body: JSON.stringify({ old: oldPwd, new: newPwd }) });
       toast('密码已更新', 'success');
-      $('#pwdOld').value = $('#pwdNew').value = $('#pwdNew2').value = '';
+      if ($('#pwdOld')) $('#pwdOld').value = '';
+      $('#pwdNew').value = $('#pwdNew2').value = '';
     } catch (e) { toast(e.message, 'error'); }
   });
   $('#auditRefresh').addEventListener('click', loadAudit);
@@ -1584,6 +1588,62 @@ function openNodeForm(id) {
   renderPage();
 }
 
+async function openSSHScanner(onApply, onKey) {
+  let data;
+  try {
+    data = await api('/api/ssh/discover');
+  } catch (e) {
+    toast(e.message, 'error', 6000);
+    return;
+  }
+  const cands = data.candidates || [];
+  const keys = (data.keys || []).filter(k => !k.encrypted);
+  const row = (c, i) => {
+    const tag = c.key_path ? (c.key_encrypted ? '<span class="ssh-tag warn">私钥有口令</span>' : '<span class="ssh-tag">带私钥</span>') : '';
+    const addr = (c.user ? c.user + '@' : '') + c.host + ':' + c.port;
+    return `<button type="button" class="ssh-item" data-c="${i}">
+      <span class="ssh-src ${c.source === 'config' ? 'cfg' : ''}">${c.source === 'config' ? 'CONFIG' : 'KNOWN'}</span>
+      <span class="ssh-main"><b>${esc(c.name)}</b><span class="mono">${esc(addr)}</span>${c.note ? `<span class="ssh-note">${esc(c.note)}</span>` : ''}</span>
+      ${tag}
+      <span class="ssh-go">填入</span>
+    </button>`;
+  };
+  const cfgRows = cands.map((c, i) => c.source === 'config' ? row(c, i) : '').join('');
+  const knownRows = cands.map((c, i) => c.source !== 'config' ? row(c, i) : '').join('');
+
+  const root = $('#modal-root');
+  root.innerHTML = `<div class="modal-mask"><div class="modal ssh-modal" role="dialog" aria-modal="true">
+    <h3 class="modal-title">识别本机 SSH</h3>
+    <p class="modal-desc">扫描目录 <span class="mono">${esc(data.ssh_dir)}</span>，选择后自动填入节点信息</p>
+    <div class="ssh-scan-list">
+      ${cfgRows ? `<div class="ssh-group-h">~/.ssh/config</div>${cfgRows}` : ''}
+      ${knownRows ? `<div class="ssh-group-h">known_hosts</div>${knownRows}` : ''}
+      ${!cfgRows && !knownRows ? `<div class="ssh-empty"><b>没有找到可用的主机</b><span>在 ~/.ssh/config 中添加 Host 配置后重新识别，或在下方直接选择本机私钥</span></div>` : ''}
+    </div>
+    ${keys.length ? `<div class="ssh-keys"><div class="ssh-group-h">本机私钥（仅填入私钥）</div><div class="ssh-key-list">${keys.map((k, i) => `<button type="button" class="ssh-key-chip" data-k="${i}"><b>${esc(k.name)}</b><span class="mono">${esc(k.path)}</span></button>`).join('')}</div></div>` : ''}
+    <div class="modal-actions">
+      <button class="btn ghost" data-x="close">关闭</button>
+      <button class="btn" data-x="reload">重新识别</button>
+    </div>
+  </div></div>`;
+
+  root.querySelectorAll('[data-c]').forEach(btn => btn.addEventListener('click', () => {
+    const c = cands[Number(btn.dataset.c)];
+    if (!c) return;
+    closeModal();
+    onApply(c);
+  }));
+  root.querySelectorAll('[data-k]').forEach(btn => btn.addEventListener('click', () => {
+    const k = keys[Number(btn.dataset.k)];
+    if (!k) return;
+    closeModal();
+    onKey(k.path);
+  }));
+  root.querySelector('[data-x=close]').onclick = closeModal;
+  root.querySelector('[data-x=reload]').onclick = () => { closeModal(); openSSHScanner(onApply, onKey); };
+  root.querySelector('.modal-mask').onclick = ev => { if (ev.target.classList.contains('modal-mask')) closeModal(); };
+}
+
 function renderNodeForm(sub) {
   const editing = !!sub.id;
   const n = editing ? state.nodes.find(x => x.id === sub.id) : null;
@@ -1598,6 +1658,18 @@ function renderNodeForm(sub) {
       <div class="head-actions"><button class="btn sm ghost" id="nodeBackTop">返回</button></div>
     </section>
     <div class="card" style="max-width:920px">
+      <div class="ssh-scan-bar">
+        <div class="ssh-scan-main">
+          <span class="ssh-scan-ic" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 17h16"/><path d="M7 11.5 10.5 15 7 18.5" transform="translate(0 -4)"/><path d="M12 14.5h5" transform="translate(0 -4)"/></svg>
+          </span>
+          <div class="ssh-scan-text">
+            <b>快速识别本机 SSH</b>
+            <span>读取${state.desktop ? '本机' : '面板所在机器'}的 ~/.ssh/config 与 known_hosts，自动填入地址、用户名和私钥</span>
+          </div>
+        </div>
+        <button class="btn sm" id="sshScanBtn" type="button">识别本机 SSH</button>
+      </div>
       <div class="form-grid">
         <div class="field"><label>节点名称</label><input type="text" id="nodeName" value="${esc(n ? n.name : '')}" placeholder="如 kaynai NAS"></div>
         <div class="field"><label>SSH 地址</label><input type="text" id="nodeAddr" value="${esc(n ? n.addr : '')}" placeholder="192.168.5.50:22"></div>
@@ -1611,8 +1683,15 @@ function renderNodeForm(sub) {
         </div>
         <div class="field full" id="keyField">
           <label>SSH 私钥</label>
+          <div class="key-picked hidden" id="pickedKey">
+            <div class="key-picked-main">
+              <b id="pickedKeyName"></b>
+              <span class="mono" id="pickedKeyPath"></span>
+            </div>
+            <button class="btn sm ghost" id="clearPickedKey" type="button">取消</button>
+          </div>
           <textarea id="nodeKey" class="keyarea" spellcheck="false" placeholder="${editing ? '留空表示不修改已保存的私钥' : '-----BEGIN OPENSSH PRIVATE KEY-----'}">${n && n.has_key ? '' : ''}</textarea>
-          <div class="hint">${editing && n.has_key ? '已保存私钥，留空保持不变' : '粘贴 OpenSSH / PEM 格式私钥内容'}</div>
+          <div class="hint">${editing && n.has_key ? '已保存私钥，留空保持不变；可粘贴新私钥覆盖' : '粘贴 OpenSSH / PEM 格式私钥，或点击上方「识别本机 SSH」导入'}</div>
         </div>
         <div class="field full hidden" id="passwordField">
           <label>SSH 密码</label>
@@ -1654,12 +1733,54 @@ function renderNodeForm(sub) {
   $('#nodeSudo').addEventListener('change', syncSudo);
   syncSudo();
 
+  let pickedKeyPath = '';
+  const setPickedKey = path => {
+    pickedKeyPath = path || '';
+    const box = $('#pickedKey');
+    if (!box) return;
+    box.classList.toggle('hidden', !pickedKeyPath);
+    if (pickedKeyPath) {
+      const name = $('#pickedKeyName');
+      name.textContent = pickedKeyPath.split(/[\\/]/).pop();
+      name.title = pickedKeyPath;
+      $('#pickedKeyPath').textContent = pickedKeyPath;
+    }
+  };
+  $('#clearPickedKey').addEventListener('click', () => setPickedKey(''));
+  $('#nodeKey').addEventListener('input', () => {
+    if ($('#nodeKey').value.trim()) setPickedKey('');
+  });
+
+  const applySSHKey = path => {
+    const rad = $('input[name=authType][value=key]');
+    rad.checked = true;
+    rad.dispatchEvent(new Event('change', { bubbles: true }));
+    setPickedKey(path);
+    toast('已选择本机私钥，保存时自动读取', 'success');
+  };
+  const applySSHCandidate = c => {
+    $('#nodeName').value = c.name || c.host;
+    $('#nodeAddr').value = c.host + (c.port && c.port !== 22 ? ':' + c.port : '');
+    $('#nodeUser').value = c.user || '';
+    if (c.key_path) {
+      if (c.key_encrypted) {
+        toast('该私钥有口令保护，已跳过；请改用密码或粘贴无口令私钥', 'error', 6500);
+        return;
+      }
+      applySSHKey(c.key_path);
+    } else {
+      toast('已填入主机信息，请补充登录凭据后保存', 'success', 5000);
+    }
+  };
+  $('#sshScanBtn').addEventListener('click', () => openSSHScanner(applySSHCandidate, applySSHKey));
+
   const collect = () => ({
     name: $('#nodeName').value.trim(),
     addr: $('#nodeAddr').value.trim(),
     user: $('#nodeUser').value.trim(),
     auth_type: $('input[name=authType]:checked').value,
     private_key: $('#nodeKey') ? $('#nodeKey').value : '',
+    key_path: $('#nodeKey') && $('#nodeKey').value.trim() ? '' : pickedKeyPath,
     password: $('#nodePassword') ? $('#nodePassword').value : '',
     sudo: $('#nodeSudo').checked,
     sudo_password: $('#nodeSudoPwd').value,
@@ -1672,7 +1793,7 @@ function renderNodeForm(sub) {
     if (!payload.name) { toast('请填写节点名称', 'error'); return; }
     if (!payload.addr) { toast('请填写 SSH 地址', 'error'); return; }
     if (!payload.user) { toast('请填写 SSH 用户名', 'error'); return; }
-    if (!editing && payload.auth_type === 'key' && !payload.private_key.trim()) { toast('请粘贴 SSH 私钥', 'error'); return; }
+    if (!editing && payload.auth_type === 'key' && !payload.private_key.trim() && !payload.key_path) { toast('请粘贴 SSH 私钥或选择本机私钥', 'error'); return; }
     if (!editing && payload.auth_type === 'password' && !payload.password) { toast('请填写 SSH 密码', 'error'); return; }
     $('#nodeSave').disabled = true;
     $('#nodeSaveTest').disabled = true;
@@ -1806,6 +1927,7 @@ async function boot() {
     if (!res.ok) throw new Error('unauth');
     const me = await res.json();
     state.authed = true;
+    state.desktop = !!me.desktop;
     state.version = me.version || '';
     state.settings = me.settings || state.settings;
   } catch (e) {

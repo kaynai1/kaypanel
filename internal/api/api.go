@@ -3,6 +3,7 @@ package api
 import (
 	"crypto/hmac"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"io"
@@ -30,6 +31,8 @@ type Server struct {
 	version  string
 	sessions *sessions
 	limiter  *loginLimiter
+
+	desktopToken string
 }
 
 func New(store *config.Store, mgr *node.Manager, auditLog *audit.Log, web http.FileSystem, version string) *Server {
@@ -44,6 +47,10 @@ func New(store *config.Store, mgr *node.Manager, auditLog *audit.Log, web http.F
 	}
 }
 
+func (s *Server) EnableDesktop(token string) {
+	s.desktopToken = token
+}
+
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 
@@ -51,6 +58,7 @@ func (s *Server) Handler() http.Handler {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
 	})
+	mux.HandleFunc("GET /api/desktop/login", s.handleDesktopLogin)
 	mux.HandleFunc("POST /api/login", s.handleLogin)
 	mux.Handle("POST /api/logout", s.auth(s.handleLogout))
 	mux.Handle("GET /api/me", s.auth(s.handleMe))
@@ -61,6 +69,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/overview", s.auth(s.handleOverview))
 	mux.Handle("GET /api/templates", s.auth(s.handleTemplates))
 
+	mux.Handle("GET /api/ssh/discover", s.auth(s.handleSSHDiscover))
 	mux.Handle("GET /api/nodes", s.auth(s.handleNodes))
 	mux.Handle("POST /api/nodes", s.auth(s.handleNodeAdd))
 	mux.Handle("PUT /api/nodes/{id}", s.auth(s.handleNodeUpdate))
@@ -221,6 +230,12 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.limiter.reset(ip)
+	s.setSessionCookie(w, r)
+	s.audit.Add("admin", "", "登录成功", ip)
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (s *Server) setSessionCookie(w http.ResponseWriter, r *http.Request) {
 	sig := s.sessions.create()
 	http.SetCookie(w, &http.Cookie{
 		Name:     sessionCookie,
@@ -231,8 +246,26 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		Secure:   r.TLS != nil || strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https"),
 		MaxAge:   7 * 24 * 3600,
 	})
-	s.audit.Add("admin", "", "登录成功", ip)
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (s *Server) handleDesktopLogin(w http.ResponseWriter, r *http.Request) {
+	if s.desktopToken == "" {
+		http.NotFound(w, r)
+		return
+	}
+	ip := net.ParseIP(remoteIP(r))
+	if ip == nil || !ip.IsLoopback() {
+		http.NotFound(w, r)
+		return
+	}
+	token := r.URL.Query().Get("token")
+	if subtle.ConstantTimeCompare([]byte(token), []byte(s.desktopToken)) != 1 {
+		http.NotFound(w, r)
+		return
+	}
+	s.setSessionCookie(w, r)
+	s.audit.Add("admin", "", "桌面版登录", remoteIP(r))
+	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
@@ -249,6 +282,7 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 		"authenticated": true,
 		"version":       s.version,
 		"settings":      s.store.Settings(),
+		"desktop":       s.desktopToken != "",
 	})
 }
 
@@ -267,7 +301,7 @@ func (s *Server) handlePassword(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "新密码至少 8 位")
 		return
 	}
-	if !s.store.CheckPassword(req.Old) {
+	if !(s.desktopToken != "" && req.Old == "") && !s.store.CheckPassword(req.Old) {
 		writeErr(w, http.StatusForbidden, "当前密码错误")
 		return
 	}
@@ -380,6 +414,19 @@ type nodeReq struct {
 	SudoPassword string `json:"sudo_password"`
 	FileRoot     string `json:"file_root"`
 	StacksDir    string `json:"stacks_dir"`
+	KeyPath      string `json:"key_path"`
+}
+
+func (n *nodeReq) loadKey() error {
+	if n.AuthType == "password" || n.PrivateKey != "" || n.KeyPath == "" {
+		return nil
+	}
+	key, err := readLocalKey(n.KeyPath)
+	if err != nil {
+		return err
+	}
+	n.PrivateKey = key
+	return nil
 }
 
 func (n nodeReq) config() config.Node {
@@ -403,6 +450,10 @@ func (s *Server) handleNodeAdd(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "请求格式错误")
 		return
 	}
+	if err := req.loadKey(); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	c, err := s.mgr.Add(req.config())
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
@@ -417,6 +468,10 @@ func (s *Server) handleNodeUpdate(w http.ResponseWriter, r *http.Request) {
 	var req nodeReq
 	if err := readJSON(r, &req); err != nil {
 		writeErr(w, http.StatusBadRequest, "请求格式错误")
+		return
+	}
+	if err := req.loadKey(); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	c := req.config()

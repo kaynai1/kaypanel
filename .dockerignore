@@ -6,3 +6,6 @@ dist
 *.exe
 *.log
 node_modules
+build
+installer
+desktop
