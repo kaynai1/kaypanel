@@ -43,6 +43,7 @@ var (
 	procGetMonitorInfo           = user32dll.NewProc("GetMonitorInfoW")
 	procGetDpiForWindow          = user32dll.NewProc("GetDpiForWindow")
 	procAdjustWindowRectExForDpi = user32dll.NewProc("AdjustWindowRectExForDpi")
+	procGetWindowRect            = user32dll.NewProc("GetWindowRect")
 	procSetForegroundWindow      = user32dll.NewProc("SetForegroundWindow")
 	procLoadImageW               = user32dll.NewProc("LoadImageW")
 	procGetSystemMetrics         = user32dll.NewProc("GetSystemMetrics")
@@ -65,11 +66,14 @@ const (
 	gwlExStyle      = -20
 	gwlWndProc      = -4
 	wsCaption       = 0x00C00000
+	wsExToolWindow  = 0x00000080
+	wsExAppWindow   = 0x00040000
 	swpNoSize       = 0x0001
 	swpNoMove       = 0x0002
 	swpNoZOrder     = 0x0004
 	swpNoActivate   = 0x0010
 	swpFrameChanged = 0x0020
+	swpShowWindow   = 0x0040
 	swMinimize      = 6
 	swMaximize      = 3
 	swRestore       = 9
@@ -92,6 +96,7 @@ const (
 	trayIconID  = 1
 	menuShow    = 1
 	menuExit    = 2
+	menuWidget  = 3
 	nimAdd      = 0x00000000
 	nimModify   = 0x00000001
 	nimDelete   = 0x00000002
@@ -117,6 +122,11 @@ type point struct {
 type winRect struct {
 	Left, Top, Right, Bottom int32
 }
+
+var (
+	hwndTopmost    = ^uintptr(0)
+	hwndNotTopmost = ^uintptr(1)
+)
 
 type minMaxInfo struct {
 	PtReserved     point
@@ -205,6 +215,7 @@ func main() {
 		defer cancel()
 		inst.Shutdown(ctx)
 	}()
+	appURL = inst.URL
 
 	authURL := inst.URL + "/api/desktop/login?token=" + url.QueryEscape(inst.DesktopToken)
 	cacheDir, _ := os.UserCacheDir()
@@ -228,6 +239,7 @@ func main() {
 		return
 	}
 	defer w.Destroy()
+	mainWeb = w
 	makeFrameless(w)
 	subclassWindow(w)
 	bindWindow(w)
@@ -262,6 +274,12 @@ var (
 	balloonShown bool
 	trayNid      notifyIconData
 	showEvent    uintptr
+
+	mainWeb    webview2.WebView
+	appURL     string
+	widgetOn   bool
+	widgetMax  bool
+	widgetPrev winRect
 )
 
 // Maximizing a caption-less thick-frame window covers the taskbar, so clamp
@@ -280,7 +298,7 @@ func subclassWindow(w webview2.WebView) {
 			handleTray(h, lp)
 			return 0
 		case showWindowMsg:
-			showMain(h)
+			showMainFromTray(h)
 			return 0
 		}
 		if prevWndProc == 0 {
@@ -342,9 +360,23 @@ func notifyHidden() {
 func handleTray(hwnd, lp uintptr) {
 	switch uint32(lp) & 0xffff {
 	case wmLButtonUp, wmLButtonDbl:
-		showMain(hwnd)
+		showMainFromTray(hwnd)
 	case wmRButtonUp:
 		showTrayMenu(hwnd)
+	}
+}
+
+func showMainFromTray(hwnd uintptr) {
+	wasWidget := widgetOn
+	showMain(hwnd)
+	if wasWidget {
+		navigateWidgetOut()
+	}
+}
+
+func navigateWidgetOut() {
+	if mainWeb != nil && appURL != "" {
+		mainWeb.Navigate(appURL + "/#/overview")
 	}
 }
 
@@ -354,9 +386,11 @@ func showTrayMenu(hwnd uintptr) {
 		return
 	}
 	openText, _ := windows.UTF16PtrFromString("打开 KayPanel")
+	widgetText, _ := windows.UTF16PtrFromString("悬浮挂件")
 	exitText, _ := windows.UTF16PtrFromString("退出")
 	procAppendMenuW.Call(menu, mfString, menuShow, uintptr(unsafe.Pointer(openText)))
 	procSetMenuDefaultItem.Call(menu, menuShow, 0)
+	procAppendMenuW.Call(menu, mfString, menuWidget, uintptr(unsafe.Pointer(widgetText)))
 	procAppendMenuW.Call(menu, mfSeparator, 0, 0)
 	procAppendMenuW.Call(menu, mfString, menuExit, uintptr(unsafe.Pointer(exitText)))
 	procSetForegroundWindow.Call(hwnd)
@@ -367,7 +401,12 @@ func showTrayMenu(hwnd uintptr) {
 	procPostMessage.Call(hwnd, wmNull, 0, 0)
 	switch cmd {
 	case menuShow:
-		showMain(hwnd)
+		showMainFromTray(hwnd)
+	case menuWidget:
+		enterWidgetMode(hwnd)
+		if mainWeb != nil && appURL != "" {
+			mainWeb.Navigate(appURL + "/#/widget")
+		}
 	case menuExit:
 		procPostMessage.Call(hwnd, wmClose, 0, 0)
 	}
@@ -377,12 +416,79 @@ func showMain(hwnd uintptr) {
 	if hwnd == 0 {
 		return
 	}
+	if widgetOn {
+		exitWidgetMode(hwnd)
+	}
 	if z, _, _ := procIsIconic.Call(hwnd); z != 0 {
 		procShowWindow.Call(hwnd, swRestore)
 	} else {
 		procShowWindow.Call(hwnd, swShow)
 	}
 	procSetForegroundWindow.Call(hwnd)
+}
+
+func enterWidgetMode(hwnd uintptr) {
+	if hwnd == 0 || widgetOn {
+		return
+	}
+	widgetMax = false
+	if z, _, _ := procIsZoomed.Call(hwnd); z != 0 {
+		widgetMax = true
+		procShowWindow.Call(hwnd, swRestore)
+	}
+	if z, _, _ := procIsIconic.Call(hwnd); z != 0 {
+		procShowWindow.Call(hwnd, swRestore)
+	}
+	procGetWindowRect.Call(hwnd, uintptr(unsafe.Pointer(&widgetPrev)))
+	ex, _, _ := procGetWindowLongPtr.Call(hwnd, ptrIndex(gwlExStyle))
+	ex |= wsExToolWindow
+	ex &^= wsExAppWindow
+	procSetWindowLongPtr.Call(hwnd, ptrIndex(gwlExStyle), ex)
+
+	dpi, _, _ := procGetDpiForWindow.Call(hwnd)
+	if dpi == 0 {
+		dpi = 96
+	}
+	scale := float64(dpi) / 96
+	wpx := int64(360 * scale)
+	hpx := int64(548 * scale)
+	margin := int64(24 * scale)
+	var x, y int64 = 80, 80
+	var mi monitorInfo
+	mi.CbSize = uint32(unsafe.Sizeof(mi))
+	hmon, _, _ := procMonitorFromWindow.Call(hwnd, monitorNearest)
+	if hmon != 0 {
+		if ok, _, _ := procGetMonitorInfo.Call(hmon, uintptr(unsafe.Pointer(&mi))); ok != 0 {
+			x = int64(mi.RcWork.Right) - wpx - margin
+			y = int64(mi.RcWork.Top) + margin
+		}
+	}
+	procSetWindowPos.Call(hwnd, hwndTopmost, uintptr(x), uintptr(y), uintptr(wpx), uintptr(hpx),
+		swpShowWindow|swpFrameChanged)
+	widgetOn = true
+}
+
+func exitWidgetMode(hwnd uintptr) {
+	if hwnd == 0 || !widgetOn {
+		return
+	}
+	ex, _, _ := procGetWindowLongPtr.Call(hwnd, ptrIndex(gwlExStyle))
+	ex &^= wsExToolWindow
+	ex |= wsExAppWindow
+	procSetWindowLongPtr.Call(hwnd, ptrIndex(gwlExStyle), ex)
+
+	w := int64(widgetPrev.Right - widgetPrev.Left)
+	h := int64(widgetPrev.Bottom - widgetPrev.Top)
+	if w <= 0 || h <= 0 {
+		w, h = 1280, 840
+	}
+	procSetWindowPos.Call(hwnd, hwndNotTopmost,
+		uintptr(int64(widgetPrev.Left)), uintptr(int64(widgetPrev.Top)),
+		uintptr(w), uintptr(h), swpShowWindow|swpFrameChanged)
+	if widgetMax {
+		procShowWindow.Call(hwnd, swMaximize)
+	}
+	widgetOn = false
 }
 
 func createShowEvent() {
@@ -482,6 +588,15 @@ func bindWindow(w webview2.WebView) {
 		lp := uintptr(uint16(pt.X)) | uintptr(uint16(pt.Y))<<16
 		procReleaseCapture.Call()
 		procSendMessage.Call(hwnd, wmNCLButtonDown, htCaption, lp)
+		return ""
+	})
+	_ = w.Bind("kaypanelWidget", func(action string) string {
+		switch action {
+		case "enter":
+			enterWidgetMode(hwnd)
+		case "open":
+			showMain(hwnd)
+		}
 		return ""
 	})
 }

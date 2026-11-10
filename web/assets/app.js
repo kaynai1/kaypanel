@@ -1,6 +1,6 @@
 'use strict';
 
-const TOP_PAGES = ['overview', 'personality', 'timeline', 'containers', 'apps', 'files', 'terminal', 'ai', 'settings'];
+const TOP_PAGES = ['overview', 'topology', 'personality', 'timeline', 'containers', 'apps', 'files', 'terminal', 'ai', 'settings'];
 const $ = (sel, el = document) => el.querySelector(sel);
 const $$ = (sel, el = document) => Array.from(el.querySelectorAll(sel));
 
@@ -53,6 +53,11 @@ const state = {
   timelineNode: 'all',
   timelineLevel: 'all',
   timelineOpen: {},
+  tlPlay: { t: 0, playing: false, speed: 8, timer: null, last: 0, cache: null, popKey: '' },
+  topologyError: '',
+  topoPoll: null,
+  topoResize: null,
+  widgetTimer: null,
   aiStackPrompt: '',
   aiStackBusy: false,
   aiStackResult: null,
@@ -99,6 +104,10 @@ const ICON_PATHS = {
   winMax: '<rect x="6" y="6" width="12" height="12" rx="1"/>',
   winRestore: '<rect x="8.5" y="8.5" width="10" height="10" rx="1"/><path d="M8.5 16h-2a1 1 0 0 1-1-1V5.5a1 1 0 0 1 1-1H16a1 1 0 0 1 1 1v2"/>',
   winClose: '<path d="m6.5 6.5 11 11M17.5 6.5l-11 11"/>',
+  topology: '<circle cx="12" cy="12" r="2.4"/><circle cx="5" cy="5.5" r="1.9"/><circle cx="19" cy="6.5" r="1.9"/><circle cx="6" cy="18.5" r="1.9"/><circle cx="18" cy="18" r="1.9"/><path d="m6.5 6.9 3.1 3M17.6 7.6l-3.1 3M7.6 17.1l2.9-3M16.6 16.9l-2.8-2.6"/>',
+  widget: '<rect x="3" y="4" width="18" height="13" rx="2"/><rect x="12.5" y="10" width="6.5" height="4.6" rx="1"/><path d="M8 20h8"/>',
+  play: '<path d="M8 5.2v13.6L19 12 8 5.2Z"/>',
+  pause: '<path d="M9 5v14M15 5v14"/>',
 };
 
 function ico(name, cls = '') {
@@ -298,6 +307,7 @@ function renderShell() {
       <nav class="side-nav" id="sideNav">
         <div class="nav-group">监控</div>
         <button class="nav-item" data-page="overview">${ico('overview')}<span>概览</span></button>
+        <button class="nav-item" data-page="topology">${ico('topology')}<span>机房拓扑</span></button>
         <button class="nav-item" data-page="personality">${ico('heart')}<span>性格周报</span></button>
         <button class="nav-item" data-page="timeline">${ico('clock')}<span>故障回放</span></button>
         <button class="nav-item" data-page="containers">${ico('container')}<span>容器</span><span class="nav-badge hidden" id="navCtrBadge"></span></button>
@@ -319,6 +329,7 @@ function renderShell() {
         <div class="node-switch" id="nodeSwitchWrap"></div>
         <div class="live-pill"><span class="live-dot"></span><span id="liveText">实时监控</span></div>
         <div class="top-right">
+          ${hasWindowHost() ? `<button class="icon-btn" id="widgetBtn" title="悬浮挂件">${ico('widget')}</button>` : ''}
           <button class="icon-btn" id="wallBtn" title="监控大屏">${ico('wall')}</button>
           <button class="icon-btn" id="topRefresh" title="刷新当前页">${ico('refresh')}</button>
           ${state.desktop ? '' : `<button class="icon-btn" id="logoutBtn" title="退出登录">${ico('logout')}</button>`}
@@ -351,6 +362,7 @@ function renderShell() {
   });
   $('#topRefresh').addEventListener('click', refreshCurrentPage);
   $('#wallBtn').addEventListener('click', () => navigate('wall'));
+  if ($('#widgetBtn')) $('#widgetBtn').addEventListener('click', enterWidgetMode);
   if ($('#logoutBtn')) {
     $('#logoutBtn').addEventListener('click', async () => {
       try { await api('/api/logout', { method: 'POST', body: '{}' }); } catch (e) {}
@@ -414,11 +426,13 @@ function refreshCurrentPage() {
   if (state.subview && state.subview.type === 'inspect') { loadInspect(); return; }
   switch (state.page) {
     case 'overview': loadOverview(true); loadProcesses(); break;
+    case 'topology': loadTopology(true); break;
     case 'personality': loadPersonality(true); break;
     case 'timeline': loadTimeline(true); break;
     case 'containers': loadContainers(); break;
     case 'apps': loadStacks(); break;
     case 'files': loadFiles(state.filePath); break;
+    case 'widget': refreshWidget(); break;
     default: renderPage();
   }
 }
@@ -475,7 +489,7 @@ function updateNodePills() {
 }
 
 function navigate(page) {
-  if (page !== 'wall' && !TOP_PAGES.includes(page)) page = 'overview';
+  if (page !== 'wall' && page !== 'widget' && !TOP_PAGES.includes(page)) page = 'overview';
   state.subview = null;
   state.page = page;
   const hash = '#/' + page;
@@ -488,8 +502,8 @@ function navigate(page) {
 
 function onRoute() {
   const p = (location.hash.replace(/^#\/?/, '') || 'overview');
-  if (p === 'wall') {
-    state.page = 'wall';
+  if (p === 'wall' || p === 'widget') {
+    state.page = p;
     state.subview = null;
     renderPage();
     return;
@@ -532,9 +546,17 @@ function cleanupPage() {
   if (state.wallTimer) { clearInterval(state.wallTimer); state.wallTimer = null; }
   if (state.wallClock) { clearInterval(state.wallClock); state.wallClock = null; }
   if (state.wallKey) { document.removeEventListener('keydown', state.wallKey); state.wallKey = null; }
+  if (state.topoPoll) { clearInterval(state.topoPoll); state.topoPoll = null; }
+  if (state.topoResize) { window.removeEventListener('resize', state.topoResize); state.topoResize = null; }
+  if (state.widgetTimer) { clearInterval(state.widgetTimer); state.widgetTimer = null; }
+  tlPlayPause();
+  if (state.tlPlay.cache) state.tlPlay.cache = null;
   const wall = $('#wallRoot');
   if (wall) wall.remove();
+  const widget = $('#widgetRoot');
+  if (widget) widget.remove();
   document.body.classList.remove('wall-mode');
+  document.body.classList.remove('widget-mode');
   closeLogDrawer();
   disposeTerminal();
 }
@@ -542,6 +564,7 @@ function cleanupPage() {
 function renderPage() {
   cleanupPage();
   if (state.page === 'wall') return renderWall();
+  if (state.page === 'widget') return renderWidget();
   const selNode = currentNode();
   if (selNode && selNode.sftp_only && ['containers', 'apps', 'terminal'].includes(state.page)) {
     state.page = 'files';
@@ -558,6 +581,7 @@ function renderPage() {
   if (sub && sub.type === 'ai-stack') return renderAIStack();
   switch (state.page) {
     case 'overview': return renderOverview();
+    case 'topology': return renderTopology();
     case 'personality': return renderPersonality();
     case 'timeline': return renderTimeline();
     case 'containers': return renderContainers();
@@ -739,7 +763,7 @@ async function loadOverview(render = true) {
 }
 
 async function refreshNodesLight() {
-  if ((state.page === 'overview' || state.page === 'wall') && !state.subview) return;
+  if (['overview', 'wall', 'widget', 'topology'].includes(state.page) && !state.subview) return;
   try {
     const d = await api('/api/nodes?light=1');
     const list = d.nodes || [];
@@ -2621,6 +2645,462 @@ async function copyInspectImage() {
   }
 }
 
+/* ---------- topology ---------- */
+
+function topoWarn(v, limit) {
+  return (Number(v) || 0) >= (limit || 90);
+}
+
+function topoBarHTML(label, val, color, warn) {
+  const v = Math.max(0, Math.min(100, Number(val) || 0));
+  return `<div class="topo-bar"><span>${label}</span><span class="topo-track"><i style="width:${v.toFixed(1)}%;background:${warn ? '#dc2626' : color}"></i></span><b>${v.toFixed(0)}%</b></div>`;
+}
+
+function topoNodeHTML(n, p) {
+  const m = n.latest || {};
+  const st = state.settings || {};
+  const cpu = n.online ? Number(m.cpu) || 0 : 0;
+  const memP = n.online ? pct(m.mem_used, m.mem_total) : 0;
+  const diskP = n.online ? pct(m.disk_used, m.disk_total) : 0;
+  const run = n.online ? Math.max(0, Number(m.docker_running) || 0) : 0;
+  const total = n.online ? Math.max(0, Number(m.docker_total) || 0) : 0;
+  let body;
+  if (!n.online) {
+    body = `<div class="topo-node-off">${esc(n.waking ? 'Instabox 空闲休眠，正在唤醒…' : (n.error || 'SSH 连接中断，等待重连'))}</div>`;
+  } else if (n.sftp_only) {
+    body = `<div class="topo-node-off soft">仅文件管理节点，不采集系统指标</div>`;
+  } else {
+    const dots = total
+      ? Array.from({ length: Math.min(total, 6) }, (_, i) => `<i class="${i < run ? 'run' : ''}"></i>`).join('') + (total > 6 ? '<em>…</em>' : '')
+      : '';
+    body = `<div class="topo-bars">
+        ${topoBarHTML('CPU', cpu, '#2563eb', topoWarn(cpu, st.cpu_alert))}
+        ${topoBarHTML('内存', memP, '#7c3aed', topoWarn(memP, st.mem_alert))}
+        ${topoBarHTML('磁盘', diskP, '#d97706', topoWarn(diskP, st.disk_alert))}
+      </div>
+      <div class="topo-node-foot">
+        <span class="topo-ctrs">${dots}</span>
+        <span>${total ? `${run} / ${total} 容器` : '未安装 Docker'}</span>
+      </div>`;
+  }
+  return `<button type="button" class="topo-node ${n.online ? 'online' : 'offline'}" style="left:${p.x.toFixed(1)}px;top:${p.y.toFixed(1)}px" data-topo-node="${esc(n.id)}" title="打开 ${esc(n.name)} 概览">
+    <div class="topo-node-head">
+      <span class="avatar" style="background:${avatarColor(n.id)}">${esc(initialOf(n.name))}</span>
+      <span class="topo-node-name"><b>${esc(n.name)}</b><span>${esc(n.user)}@${esc(n.addr)}</span></span>
+      <span class="dot ${nodeDotClass(n)}"></span>
+    </div>
+    ${body}
+  </button>`;
+}
+
+function topoStatsOf(nodes) {
+  const online = nodes.filter(n => n.online && !n.sftp_only);
+  const cpu = online.map(n => Number((n.latest || {}).cpu) || 0);
+  const memUsed = online.reduce((a, n) => a + (Number((n.latest || {}).mem_used) || 0), 0);
+  const memTotal = online.reduce((a, n) => a + (Number((n.latest || {}).mem_total) || 0), 0);
+  const ctr = nodes.reduce((a, n) => a + Math.max(0, Number((n.latest || {}).docker_running) || 0), 0);
+  return {
+    total: nodes.length,
+    online: nodes.filter(n => n.online).length,
+    ctr,
+    avgCpu: cpu.length ? cpu.reduce((a, b) => a + b, 0) / cpu.length : null,
+    avgMem: memTotal ? (memUsed / memTotal) * 100 : null,
+  };
+}
+
+function topoCoreHTML(stats) {
+  return `<div class="topo-core">
+    <div class="topo-core-halo"><i></i><i></i><i></i></div>
+    <img src="/assets/logo.svg" alt="">
+    <div class="topo-core-brand">KayPanel</div>
+    <div class="topo-core-ver">${esc(state.version || 'dev')} · 中控面板</div>
+    <div class="topo-core-stats">
+      <span><b>${stats.online}</b><i>/${stats.total}</i> 节点在线</span>
+      <span><b>${stats.ctr}</b><i>个</i> 容器运行</span>
+    </div>
+    <div class="topo-core-live"><i></i>LIVE 实时链路</div>
+  </div>`;
+}
+
+function drawTopology() {
+  const stage = $('#topoStage');
+  if (!stage) return;
+  const nodes = state.nodes || [];
+  const W = Math.max(stage.clientWidth || 0, 720);
+  const H = stage.clientHeight || 560;
+  const cx = W / 2, cy = H / 2;
+  const rx = Math.min(W * 0.33, 400);
+  const ry = Math.min(H * 0.34, 196);
+  const pos = nodes.map((_, i) => {
+    const ang = -Math.PI / 2 + (i * Math.PI * 2) / Math.max(nodes.length, 1);
+    return { x: cx + Math.cos(ang) * rx, y: cy + Math.sin(ang) * ry };
+  });
+  const stats = topoStatsOf(nodes);
+  const links = nodes.map((n, i) => {
+    const p = pos[i];
+    return `<line class="topo-link ${n.online ? 'on' : 'off'}" x1="${cx}" y1="${cy}" x2="${p.x.toFixed(1)}" y2="${p.y.toFixed(1)}"/>`;
+  }).join('');
+  const pulses = nodes.map((n, i) => {
+    if (!n.online) return '';
+    const p = pos[i];
+    return `<circle class="topo-pulse" r="2.8"><animateMotion dur="${(2.4 + i * 0.35).toFixed(2)}s" repeatCount="indefinite" path="M${cx} ${cy} L${p.x.toFixed(1)} ${p.y.toFixed(1)}"/></circle>`;
+  }).join('');
+  stage.innerHTML = `
+    <svg class="topo-links" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-hidden="true">
+      ${links}${pulses}
+    </svg>
+    ${topoCoreHTML(stats)}
+    ${nodes.map((n, i) => topoNodeHTML(n, pos[i])).join('')}
+    ${nodes.length ? '' : '<div class="topo-empty">还没有服务器节点<br><span>先在概览页添加节点，拓扑会自动生成</span></div>'}`;
+  const sub = $('#topoSub');
+  if (sub) {
+    sub.textContent = nodes.length
+      ? `${nodes.length} 台节点 · ${stats.online} 台在线 · ${stats.ctr} 个容器运行 · 每 15 秒自动刷新`
+      : '还没有节点 · 添加服务器后自动绘制拓扑';
+  }
+  const st = $('#topoStats');
+  if (st) {
+    st.innerHTML = `<div class="topo-stat"><span>平均 CPU</span><b>${stats.avgCpu == null ? '—' : stats.avgCpu.toFixed(1) + '%'}</b></div>
+      <div class="topo-stat"><span>平均内存</span><b>${stats.avgMem == null ? '—' : stats.avgMem.toFixed(1) + '%'}</b></div>
+      <div class="topo-stat"><span>运行容器</span><b>${stats.ctr}</b></div>
+      <div class="topo-stat"><span>链路状态</span><b class="${stats.online === nodes.length && nodes.length ? 'ok' : 'warn'}">${nodes.length ? (stats.online === nodes.length ? '全部连通' : `${nodes.length - stats.online} 条链路中断`) : '等待节点'}</b></div>`;
+  }
+}
+
+async function loadTopology(render) {
+  try {
+    const d = await api('/api/nodes?light=1');
+    const list = d.nodes || [];
+    for (const item of list) {
+      const old = state.nodes.find(x => x.id === item.id);
+      if (old && old.history) item.history = old.history;
+    }
+    state.nodes = list;
+    state.topologyError = '';
+    const errEl = $('#topoError');
+    if (errEl) errEl.classList.add('hidden');
+    ensureSelected();
+    updateNodePills();
+    if (render && state.page === 'topology' && !state.subview) drawTopology();
+  } catch (e) {
+    state.topologyError = e.message;
+    const el = $('#topoError');
+    if (el && state.page === 'topology') { el.textContent = e.message; el.classList.remove('hidden'); }
+  }
+}
+
+function renderTopology() {
+  const page = $('#page');
+  if (!page) return;
+  page.innerHTML = `
+    <section class="page-head">
+      <div><h1>机房拓扑</h1><p class="page-sub" id="topoSub">正在读取节点…</p></div>
+      <div class="head-actions">
+        <button class="btn sm" id="topoRefreshBtn">${ico('refresh', 'ico')}刷新</button>
+        <button class="btn sm primary" id="topoSaveBtn">${ico('expand', 'ico')}导出拓扑图</button>
+      </div>
+    </section>
+    <div class="banner error hidden" id="topoError"></div>
+    <div class="card topo-card">
+      <div class="topo-scroll"><div class="topo-stage" id="topoStage"></div></div>
+      <div class="topo-legend">
+        <span><i class="lg online"></i>在线</span>
+        <span><i class="lg off"></i>离线</span>
+        <span><i class="lg ctr"></i>运行中的容器</span>
+        <span class="spacer"></span>
+        <span>点击节点进入概览 · 流动光点表示实时链路</span>
+      </div>
+    </div>
+    <div class="topo-stat-grid" id="topoStats"></div>`;
+  drawTopology();
+  loadTopology(true);
+  $('#topoRefreshBtn').addEventListener('click', () => { loadTopology(true); toast('正在刷新拓扑…', '', 1200); });
+  $('#topoSaveBtn').addEventListener('click', saveTopologyImage);
+  $('#topoStage').addEventListener('click', e => {
+    const btn = e.target.closest('[data-topo-node]');
+    if (!btn) return;
+    selectNode(btn.dataset.topoNode);
+    navigate('overview');
+  });
+  if (state.topoPoll) clearInterval(state.topoPoll);
+  state.topoPoll = setInterval(() => {
+    if (state.page === 'topology' && !state.subview) loadTopology(true);
+  }, 15000);
+  state.topoResize = () => {
+    if (state.page === 'topology' && !state.subview) drawTopology();
+  };
+  window.addEventListener('resize', state.topoResize);
+}
+
+function saveTopologyImage() {
+  downloadCanvas(buildTopologyCanvas(), `KayPanel-机房拓扑-${inspectStamp()}.png`, '机房拓扑长图已保存');
+}
+
+function topoCanvasBars(ctx, x, y, w, label, val, color) {
+  const v = Math.max(0, Math.min(100, Number(val) || 0));
+  ctx.fillStyle = '#7c8798';
+  ctx.font = '400 11px ' + INSPECT_FONT;
+  ctx.fillText(label, x, y);
+  const tx = x + 34, tw = w - 78;
+  roundRectPath(ctx, tx, y - 9, tw, 6, 3);
+  ctx.fillStyle = '#eef1f6'; ctx.fill();
+  roundRectPath(ctx, tx, y - 9, Math.max(2, tw * v / 100), 6, 3);
+  ctx.fillStyle = color; ctx.fill();
+  ctx.fillStyle = '#475569';
+  ctx.font = '600 11px ' + INSPECT_FONT;
+  ctx.textAlign = 'right';
+  ctx.fillText(`${v.toFixed(0)}%`, x + w, y);
+  ctx.textAlign = 'left';
+}
+
+function buildTopologyCanvas() {
+  const dpr = 2;
+  const W = 1240, pad = 40;
+  const headerH = 170, stageH = 700, footerH = 84;
+  const H = pad + headerH + stageH + footerH;
+  const canvas = document.createElement('canvas');
+  canvas.width = W * dpr;
+  canvas.height = H * dpr;
+  const ctx = canvas.getContext('2d');
+  ctx.scale(dpr, dpr);
+  const nodes = state.nodes || [];
+  const stats = topoStatsOf(nodes);
+
+  ctx.fillStyle = '#eef2f8';
+  ctx.fillRect(0, 0, W, H);
+  roundRectPath(ctx, pad, pad, W - pad * 2, H - pad * 2, 28);
+  ctx.fillStyle = '#ffffff'; ctx.fill();
+
+  ctx.save();
+  roundRectPath(ctx, pad, pad, W - pad * 2, headerH, 28);
+  ctx.clip();
+  const g = ctx.createLinearGradient(pad, pad, W - pad, pad + headerH);
+  g.addColorStop(0, '#0f2c5c');
+  g.addColorStop(0.55, '#1d4ed8');
+  g.addColorStop(1, '#2563eb');
+  ctx.fillStyle = g;
+  ctx.fillRect(pad, pad, W - pad * 2, headerH);
+  ctx.globalAlpha = 0.12;
+  ctx.fillStyle = '#ffffff';
+  ctx.beginPath(); ctx.arc(W - 190, pad + 10, 170, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath(); ctx.arc(W - 470, pad + headerH + 40, 110, 0, Math.PI * 2); ctx.fill();
+  ctx.globalAlpha = 1;
+  ctx.fillStyle = 'rgba(191, 219, 254, 0.95)';
+  ctx.font = '600 13px ' + INSPECT_FONT;
+  ctx.fillText('KAYPANEL · 机房拓扑', pad + 44, pad + 46);
+  ctx.fillStyle = '#ffffff';
+  ctx.font = '700 34px ' + INSPECT_FONT;
+  ctx.fillText('机房拓扑图', pad + 44, pad + 100);
+  ctx.fillStyle = 'rgba(219, 234, 254, 0.92)';
+  ctx.font = '400 14px ' + INSPECT_FONT;
+  const now = new Date().toLocaleString('zh-CN', { hour12: false });
+  ctx.fillText(`${now} · ${nodes.length} 台节点 · ${stats.online} 台在线 · ${stats.ctr} 个容器运行`, pad + 44, pad + 134);
+  ctx.fillStyle = 'rgba(219, 234, 254, 0.72)';
+  ctx.font = '400 12px ' + INSPECT_FONT;
+  ctx.fillText(`平均 CPU ${stats.avgCpu == null ? '—' : stats.avgCpu.toFixed(1) + '%'} · 平均内存 ${stats.avgMem == null ? '—' : stats.avgMem.toFixed(1) + '%'}`, pad + 44, pad + 156);
+  ctx.textAlign = 'right';
+  ctx.fillStyle = 'rgba(219, 234, 254, 0.8)';
+  ctx.font = '600 13px ' + INSPECT_FONT;
+  ctx.fillText(`KayPanel ${state.version || ''}`, W - pad - 44, pad + 46);
+  ctx.textAlign = 'left';
+  ctx.restore();
+
+  const stageTop = pad + headerH + 20;
+  const cx = W / 2, cy = stageTop + stageH / 2 - 10;
+  const rx = 400, ry = 232;
+  const pos = nodes.map((_, i) => {
+    const ang = -Math.PI / 2 + (i * Math.PI * 2) / Math.max(nodes.length, 1);
+    return { x: cx + Math.cos(ang) * rx, y: cy + Math.sin(ang) * ry };
+  });
+
+  nodes.forEach((n, i) => {
+    const p = pos[i];
+    ctx.strokeStyle = n.online ? 'rgba(37, 99, 235, 0.38)' : 'rgba(148, 163, 184, 0.45)';
+    ctx.lineWidth = n.online ? 1.6 : 1.2;
+    ctx.setLineDash(n.online ? [7, 7] : [4, 8]);
+    ctx.beginPath(); ctx.moveTo(cx, cy); ctx.quadraticCurveTo((cx + p.x) / 2, (cy + p.y) / 2 - 22, p.x, p.y); ctx.stroke();
+  });
+  ctx.setLineDash([]);
+
+  const coreW = 300, coreH = 198;
+  roundRectPath(ctx, cx - coreW / 2, cy - coreH / 2, coreW, coreH, 22);
+  const cg = ctx.createLinearGradient(cx - coreW / 2, cy - coreH / 2, cx + coreW / 2, cy + coreH / 2);
+  cg.addColorStop(0, '#0f172a');
+  cg.addColorStop(1, '#1e3a8a');
+  ctx.fillStyle = cg; ctx.fill();
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#ffffff'; ctx.font = '700 24px ' + INSPECT_FONT;
+  ctx.fillText('KayPanel', cx, cy - 38);
+  ctx.fillStyle = 'rgba(191, 219, 254, 0.9)'; ctx.font = '400 12px ' + INSPECT_FONT;
+  ctx.fillText(`中控面板 · ${state.version || ''}`, cx, cy - 16);
+  ctx.fillStyle = '#93c5fd'; ctx.font = '600 12px ' + INSPECT_FONT;
+  ctx.fillText(`${stats.online} / ${stats.total} 节点在线   ·   ${stats.ctr} 个容器运行`, cx, cy + 20);
+  ctx.fillStyle = 'rgba(226, 232, 240, 0.7)'; ctx.font = '400 11px ' + INSPECT_FONT;
+  ctx.fillText('LIVE · 实时监控拓扑', cx, cy + 48);
+  ctx.textAlign = 'left';
+
+  const cw = 252, ch = 136;
+  nodes.forEach((n, i) => {
+    const p = pos[i];
+    const x = p.x - cw / 2, y = p.y - ch / 2;
+    roundRectPath(ctx, x, y, cw, ch, 16);
+    ctx.fillStyle = n.online ? '#fbfcfe' : '#f8fafc';
+    ctx.fill();
+    ctx.lineWidth = 1; ctx.strokeStyle = '#e2e8f2'; ctx.stroke();
+    const m = n.latest || {};
+    const color = avatarColor(n.id);
+    ctx.beginPath(); ctx.arc(x + 26, y + 27, 14, 0, Math.PI * 2); ctx.fillStyle = color; ctx.fill();
+    ctx.fillStyle = '#ffffff'; ctx.font = '600 13px ' + INSPECT_FONT; ctx.textAlign = 'center';
+    ctx.fillText(initialOf(n.name), x + 26, y + 32);
+    ctx.textAlign = 'left';
+    ctx.fillStyle = '#0f172a'; ctx.font = '600 15px ' + INSPECT_FONT;
+    ctx.fillText(fitCanvasText(ctx, n.name, cw - 96), x + 48, y + 26);
+    ctx.fillStyle = n.online ? '#16a34a' : '#94a3b8'; ctx.font = '400 10.5px ' + INSPECT_FONT;
+    ctx.fillText(n.online ? '在线' : (n.waking ? '唤醒中' : '离线'), x + 48, y + 42);
+    ctx.fillStyle = '#94a3b8'; ctx.font = '400 10.5px ' + INSPECT_FONT;
+    ctx.textAlign = 'right';
+    ctx.fillText(fitCanvasText(ctx, `${n.user}@${n.addr}`, 120), x + cw - 14, y + 42);
+    ctx.textAlign = 'left';
+    if (n.online && !n.sftp_only) {
+      const cpu = Number(m.cpu) || 0;
+      const memP = pct(m.mem_used, m.mem_total);
+      const diskP = pct(m.disk_used, m.disk_total);
+      topoCanvasBars(ctx, x + 16, y + 68, cw - 32, 'CPU', cpu, '#2563eb');
+      topoCanvasBars(ctx, x + 16, y + 90, cw - 32, '内存', memP, '#7c3aed');
+      topoCanvasBars(ctx, x + 16, y + 112, cw - 32, '磁盘', diskP, '#d97706');
+      const run = Number(m.docker_running) || 0, total = Number(m.docker_total) || 0;
+      ctx.fillStyle = '#64748b'; ctx.font = '400 10.5px ' + INSPECT_FONT;
+      ctx.textAlign = 'right';
+      ctx.fillText(total ? `${run}/${total} 容器运行` : '无 Docker', x + cw - 16, y + 130);
+      ctx.textAlign = 'left';
+    } else {
+      ctx.fillStyle = '#94a3b8'; ctx.font = '400 12px ' + INSPECT_FONT;
+      ctx.fillText(n.sftp_only ? '仅文件管理节点' : '连接中断，等待重连', x + 16, y + 84);
+    }
+  });
+
+  const fy = H - pad - 30;
+  ctx.strokeStyle = '#e9edf4';
+  ctx.beginPath(); ctx.moveTo(pad + 44, fy - 24); ctx.lineTo(W - pad - 44, fy - 24); ctx.stroke();
+  ctx.fillStyle = '#94a3b8'; ctx.font = '400 12px ' + INSPECT_FONT;
+  ctx.fillText('由 KayPanel 自动生成 · 基于节点实时监控数据', pad + 44, fy);
+  ctx.textAlign = 'right';
+  ctx.fillText(`KayPanel ${state.version || ''}`, W - pad - 44, fy);
+  ctx.textAlign = 'left';
+  return canvas;
+}
+
+/* ---------- desktop widget ---------- */
+
+function enterWidgetMode() {
+  if (!hasWindowHost()) { toast('悬浮挂件仅在桌面版可用'); return; }
+  window.kaypanelWidget('enter');
+  navigate('widget');
+}
+
+function wgRing(p, label, color, warn, sub) {
+  const v = Math.max(0, Math.min(100, Number(p) || 0));
+  const r = 21, c = 2 * Math.PI * r;
+  const text = sub != null ? esc(sub) : `${Math.round(v)}<em>%</em>`;
+  return `<span class="wg-ring">
+    <span class="wg-ring-svg"><svg viewBox="0 0 54 54">
+      <circle class="wg-track" cx="27" cy="27" r="${r}"/>
+      <circle class="wg-bar" cx="27" cy="27" r="${r}" stroke="${warn ? '#f87171' : color}" stroke-dasharray="${c.toFixed(1)}" stroke-dashoffset="${(c * (1 - v / 100)).toFixed(1)}"/>
+    </svg><span class="wg-ring-val">${text}</span></span>
+    <span class="wg-ring-label">${label}</span>
+  </span>`;
+}
+
+function widgetNodeHTML(n) {
+  const m = n.latest || {};
+  const st = state.settings || {};
+  const online = !!n.online;
+  const cpu = online ? Number(m.cpu) || 0 : 0;
+  const memP = online ? pct(m.mem_used, m.mem_total) : 0;
+  const run = online ? Math.max(0, Number(m.docker_running) || 0) : 0;
+  const total = online ? Math.max(0, Number(m.docker_total) || 0) : 0;
+  const cpuWarn = online && cpu >= (st.cpu_alert || 90);
+  const memWarn = online && memP >= (st.mem_alert || 90);
+  const ctrPct = total ? (run / total) * 100 : 0;
+  return `<button type="button" class="wg-node ${online ? '' : 'off'}" data-wg-node="${esc(n.id)}">
+    <div class="wg-node-head">
+      <span class="dot ${nodeDotClass(n)}"></span>
+      <b>${esc(n.name)}</b>
+      <span class="wg-node-state">${online ? (n.sftp_only ? '仅文件' : '在线') : nodeStateText(n)}</span>
+    </div>
+    <div class="wg-rings">
+      ${wgRing(cpu, 'CPU', '#3b82f6', cpuWarn)}
+      ${wgRing(memP, '内存', '#8b5cf6', memWarn)}
+      ${wgRing(ctrPct, '容器', '#10b981', false, total ? `${run}/${total}` : '—')}
+    </div>
+    ${online ? '' : `<div class="wg-off">${esc(n.waking ? '正在唤醒…' : (n.error || '连接中断'))}</div>`}
+  </button>`;
+}
+
+function drawWidget() {
+  const root = $('#widgetRoot');
+  if (!root) return;
+  const list = state.nodes || [];
+  const online = list.filter(n => n.online).length;
+  const wrap = $('#widgetList', root);
+  if (wrap) wrap.innerHTML = list.length ? list.map(widgetNodeHTML).join('') : `<div class="wg-empty">还没有节点<span>在面板里添加服务器后，这里会显示实时指标</span></div>`;
+  const meta = $('#widgetMeta', root);
+  if (meta) meta.textContent = `${online}/${list.length} 在线 · ${new Date().toLocaleTimeString('zh-CN', { hour12: false })}`;
+}
+
+async function refreshWidget() {
+  try {
+    const d = await api('/api/nodes?light=1');
+    state.nodes = d.nodes || [];
+    ensureSelected();
+    drawWidget();
+  } catch (e) { /* keep last frame */ }
+}
+
+function openWidgetMain(nodeId) {
+  if (hasWindowHost()) window.kaypanelWidget('open');
+  navigate('overview');
+  if (nodeId) selectNode(nodeId);
+}
+
+function renderWidget() {
+  document.body.classList.add('widget-mode');
+  const root = document.createElement('div');
+  root.id = 'widgetRoot';
+  root.className = 'widget';
+  root.innerHTML = `
+    <header class="wg-head" id="wgDrag">
+      <span class="wg-logo">K</span>
+      <div class="wg-brand"><b>KayPanel</b><span>悬浮监控</span></div>
+      <div class="wg-meta"><i></i><span id="widgetMeta">读取中…</span></div>
+      <button type="button" class="wg-btn" id="wgOpen" title="打开主面板" aria-label="打开主面板">${ico('expand')}</button>
+      <button type="button" class="wg-btn wg-hide" id="wgHide" title="隐藏到托盘" aria-label="隐藏到托盘">${ico('winClose')}</button>
+    </header>
+    <div class="wg-list" id="widgetList"></div>
+    <footer class="wg-foot"><span>每 3 秒自动刷新</span><span>拖动顶部移动 · 点节点打开面板</span></footer>`;
+  document.body.appendChild(root);
+  drawWidget();
+  refreshWidget();
+  $('#wgOpen', root).addEventListener('click', () => openWidgetMain(''));
+  $('#wgHide', root).addEventListener('click', () => {
+    if (hasWindowHost()) window.kaypanelWindow('close');
+  });
+  const head = $('#wgDrag', root);
+  head.addEventListener('mousedown', e => {
+    if (e.button !== 0 || e.target.closest('button')) return;
+    e.preventDefault();
+    if (typeof window.kaypanelDrag === 'function') window.kaypanelDrag();
+  });
+  root.addEventListener('click', e => {
+    const btn = e.target.closest('[data-wg-node]');
+    if (btn) openWidgetMain(btn.dataset.wgNode);
+  });
+  if (state.widgetTimer) clearInterval(state.widgetTimer);
+  state.widgetTimer = setInterval(() => {
+    if (state.page === 'widget') refreshWidget();
+  }, 3000);
+}
+
 /* ---------- personality ---------- */
 
 const PERS_TONES = { ok: '#16a34a', good: '#2563eb', fair: '#d97706', bad: '#dc2626', off: '#94a3b8' };
@@ -3045,9 +3525,206 @@ function timelineDayLabel(unix) {
   return d.toLocaleDateString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'long' });
 }
 
+/* ---------- timeline playback ---------- */
+
+const TL_WINDOW = 24 * 3600;
+const TL_RATE = 60;
+
+function tlClockText(unix) {
+  const d = new Date(unix * 1000);
+  if (isNaN(d.getTime())) return '--';
+  const pad = v => String(v).padStart(2, '0');
+  return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+function tlInterp(pts, t) {
+  let lo = 0, hi = pts.length - 1, idx = -1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (pts[mid].t <= t) { idx = mid; lo = mid + 1; } else hi = mid - 1;
+  }
+  if (idx < 0) return null;
+  const a = pts[idx], b = pts[idx + 1];
+  const av = { cpu: Number(a.cpu) || 0, mem: Number(a.mem) || 0 };
+  if (!b) return av;
+  const span = b.t - a.t;
+  if (span <= 0) return av;
+  const f = Math.max(0, Math.min(1, (t - a.t) / span));
+  return {
+    cpu: av.cpu * (1 - f) + (Number(b.cpu) || 0) * f,
+    mem: av.mem * (1 - f) + (Number(b.mem) || 0) * f,
+  };
+}
+
+function tlPlayData(d) {
+  const key = `${d.time}:${state.timelineNode}:${state.timelineLevel}`;
+  if (state.tlPlay.cache && state.tlPlay.cache.key === key) return state.tlPlay.cache;
+  const end = Number(d.time) || Math.floor(Date.now() / 1000);
+  const start = end - TL_WINDOW;
+  const wantNode = state.timelineNode;
+  const trends = {};
+  for (const n of d.nodes || []) {
+    if (wantNode !== 'all' && n.id !== wantNode) continue;
+    const pts = ((d.trends && d.trends[n.id]) || []).filter(p => p && p.t && p.t >= start - 1800 && p.t <= end + 600);
+    if (pts.length) trends[n.id] = pts;
+  }
+  const series = Object.values(trends);
+  const buckets = [];
+  for (let t = start; t <= end; t += 300) {
+    let cpu = 0, mem = 0, count = 0;
+    for (const pts of series) {
+      const v = tlInterp(pts, t);
+      if (!v) continue;
+      cpu += v.cpu; mem += v.mem; count++;
+    }
+    if (count) buckets.push({ t, cpu: cpu / count, mem: mem / count });
+  }
+  const events = (d.events || [])
+    .filter(e => e.time >= start && e.time <= end)
+    .filter(e => wantNode === 'all' || e.node_id === wantNode)
+    .filter(e => state.timelineLevel === 'all' || e.level === state.timelineLevel)
+    .sort((a, b) => a.time - b.time);
+  const data = { key, start, end, buckets, events };
+  state.tlPlay.cache = data;
+  return data;
+}
+
+function tlReplaySVG(pd, t) {
+  if (pd.buckets.length < 2) return `<div class="chart-empty">还没有 24 小时趋势数据，最多几分钟后会生成</div>`;
+  const w = 1000, h = 176, padX = 6, padY = 10;
+  const xOf = bt => padX + ((bt - pd.start) / TL_WINDOW) * (w - padX * 2);
+  const yOf = v => padY + (1 - Math.max(0, Math.min(100, v)) / 100) * (h - padY * 2);
+  const line = (pts, pick) => smoothPath(pts.map(p => [xOf(p.t), yOf(pick(p))]));
+  const cpuPts = pd.buckets, memPts = pd.buckets;
+  const cpuPath = line(cpuPts, p => p.cpu);
+  const memPath = line(memPts, p => p.mem);
+  const cut = Math.max(padX, Math.min(w - padX, xOf(t)));
+  const grids = [0.25, 0.5, 0.75].map(f => `<line class="tl-grid" x1="0" y1="${(h * f).toFixed(1)}" x2="${w}" y2="${(h * f).toFixed(1)}"/>`).join('')
+    + [0.25, 0.5, 0.75].map(f => `<line class="tl-grid v" x1="${(w * f).toFixed(1)}" y1="0" x2="${(w * f).toFixed(1)}" y2="${h}"/>`).join('');
+  const hit = pd.buckets.reduce((best, p) => Math.abs(p.t - t) < Math.abs(best.t - t) ? p : best, pd.buckets[0]);
+  return `<svg class="tl-replay-svg" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">
+    <defs>
+      <linearGradient id="tl-cpu-fill" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#2563eb" stop-opacity="0.22"/><stop offset="1" stop-color="#2563eb" stop-opacity="0"/></linearGradient>
+      <clipPath id="tl-clip"><rect x="0" y="0" width="${cut.toFixed(1)}" height="${h}"/></clipPath>
+    </defs>
+    ${grids}
+    <path class="tl-faint-line cpu" d="${cpuPath}"/>
+    <path class="tl-faint-line mem" d="${memPath}"/>
+    <g clip-path="url(#tl-clip)">
+      <path d="${cpuPath} L${xOf(hit.t).toFixed(1)},${h - padY} L${xOf(pd.buckets[0].t).toFixed(1)},${h - padY} Z" fill="url(#tl-cpu-fill)"/>
+      <path class="tl-strong-line cpu" d="${cpuPath}"/>
+      <path class="tl-strong-line mem" d="${memPath}"/>
+    </g>
+    <line class="tl-cursor" x1="${cut.toFixed(1)}" y1="0" x2="${cut.toFixed(1)}" y2="${h}"/>
+    <circle class="tl-cursor-dot cpu" cx="${cut.toFixed(1)}" cy="${yOf(hit.cpu).toFixed(1)}" r="3.4"/>
+    <circle class="tl-cursor-dot mem" cx="${cut.toFixed(1)}" cy="${yOf(hit.mem).toFixed(1)}" r="3.4"/>
+  </svg>`;
+}
+
+function tlPlayerHTML(d, pd) {
+  const has = pd.buckets.length >= 2;
+  const speeds = [1, 8, 30].map(s => `<button type="button" data-tlspeed="${s}" class="${state.tlPlay.speed === s ? 'active' : ''}">${s}×</button>`).join('');
+  return `<div class="card tl-player">
+    <div class="tl-player-head">
+      <div class="tl-player-title">
+        <span class="tl-player-ico">${ico('clock')}</span>
+        <div><h2>24 小时故障回放</h2><p>拖动时间轴，或按下播放键重看故障是怎样发生的</p></div>
+      </div>
+      <div class="tl-player-actions">
+        <button class="btn sm primary" id="tlPlayBtn" ${has ? '' : 'disabled'}>${ico('play', 'ico')}播放</button>
+        <div class="tl-speed" id="tlSpeed">${speeds}</div>
+        <button class="btn sm" id="tlRealBtn">${ico('activity', 'ico')}回到最新</button>
+      </div>
+    </div>
+    <div class="tl-player-clock">
+      <b id="tlClock">${tlClockText(state.tlPlay.t)}</b>
+      <span id="tlPlayCount"></span>
+      <span class="spacer"></span>
+      <span class="tl-leg"><i style="background:#2563eb"></i>CPU</span>
+      <span class="tl-leg"><i style="background:#7c3aed"></i>内存</span>
+      <span class="tl-speed-note">1× = 每秒回放 1 分钟</span>
+    </div>
+    <div class="tl-chart-wrap" id="tlChart">${tlReplaySVG(pd, state.tlPlay.t)}</div>
+    <div class="tl-axis"><span>${tlClockText(pd.start)}</span><span>${tlClockText(pd.start + TL_WINDOW / 2)}</span><span>${tlClockText(pd.end)}</span></div>
+    <div class="tl-scrub">
+      <input type="range" id="tlScrub" min="${pd.start}" max="${pd.end}" step="30" value="${Math.round(state.tlPlay.t)}" aria-label="回放时间轴">
+      <div class="tl-marks">${pd.events.map(e => `<i class="${esc(e.level)}" style="left:${(((e.time - pd.start) / TL_WINDOW) * 100).toFixed(2)}%" title="${esc(fmtTime(e.time))} · ${esc(e.title)}"></i>`).join('')}</div>
+    </div>
+    <div class="tl-pop" id="tlPop"></div>
+  </div>`;
+}
+
+function tlPlayButton() {
+  const btn = $('#tlPlayBtn');
+  if (!btn) return;
+  btn.innerHTML = state.tlPlay.playing ? `${ico('pause', 'ico')}暂停` : `${ico('play', 'ico')}播放`;
+  btn.classList.toggle('playing', state.tlPlay.playing);
+}
+
+function tlPlayPaint() {
+  const d = state.timeline;
+  if (!d) return;
+  const pd = tlPlayData(d);
+  const t = Math.max(pd.start, Math.min(pd.end, state.tlPlay.t || pd.end));
+  const chart = $('#tlChart');
+  if (chart) chart.innerHTML = tlReplaySVG(pd, t);
+  const clock = $('#tlClock');
+  if (clock) clock.textContent = tlClockText(t);
+  const scrub = $('#tlScrub');
+  if (scrub && document.activeElement !== scrub) scrub.value = String(Math.round(t));
+  const passed = pd.events.filter(e => e.time <= t);
+  const count = $('#tlPlayCount');
+  if (count) count.textContent = `已回放 ${passed.length} / ${pd.events.length} 条事件`;
+  const recent = passed.slice(-3).reverse();
+  const pop = $('#tlPop');
+  if (pop) {
+    const sig = recent.map(e => `${e.node_id}:${e.time}:${e.title}`).join('|');
+    if (sig !== state.tlPlay.popKey) {
+      state.tlPlay.popKey = sig;
+      pop.innerHTML = recent.length
+        ? recent.map(e => `<div class="tl-pop-item ${esc(e.level)}"><span class="tl-pop-dot"></span><b>${esc(e.title)}</b><span>${esc(e.node_name)} · ${esc(tlClockText(e.time).slice(6))}</span><span class="spacer"></span><span class="tl-pop-ago">${timeAgo(e.time)}</span></div>`).join('')
+        : `<div class="tl-pop-empty">播放时，到点的事件会在这里弹出</div>`;
+    }
+  }
+}
+
+function tlPlayPause() {
+  if (state.tlPlay.timer) { clearInterval(state.tlPlay.timer); state.tlPlay.timer = null; }
+  state.tlPlay.playing = false;
+  tlPlayButton();
+}
+
+function tlPlayTick() {
+  const d = state.timeline;
+  if (!d || state.page !== 'timeline' || state.subview) { tlPlayPause(); return; }
+  const pd = tlPlayData(d);
+  const now = performance.now();
+  const dt = Math.min(1.5, (now - (state.tlPlay.last || now)) / 1000);
+  state.tlPlay.last = now;
+  state.tlPlay.t = Math.min(pd.end, state.tlPlay.t + dt * TL_RATE * state.tlPlay.speed);
+  if (state.tlPlay.t >= pd.end) tlPlayPause();
+  tlPlayPaint();
+}
+
+function tlPlayToggle() {
+  const d = state.timeline;
+  if (!d) return;
+  if (state.tlPlay.playing) { tlPlayPause(); return; }
+  const pd = tlPlayData(d);
+  if (pd.buckets.length < 2) { toast('趋势数据还不够，稍等几分钟再试'); return; }
+  if (state.tlPlay.t >= pd.end - 30) state.tlPlay.t = pd.start;
+  state.tlPlay.playing = true;
+  state.tlPlay.last = performance.now();
+  state.tlPlay.timer = setInterval(tlPlayTick, 250);
+  tlPlayButton();
+  tlPlayPaint();
+}
+
 function timelineHTML(d) {
   const nodes = d.nodes || [];
   const all = d.events || [];
+  const pd = tlPlayData(d);
+  if (!state.tlPlay.t || state.tlPlay.t < pd.start || state.tlPlay.t > pd.end) state.tlPlay.t = pd.end;
   const errors = all.filter(e => e.level === 'error').length;
   const warns = all.filter(e => e.level === 'warn').length;
   const nodeCount = {};
@@ -3085,6 +3762,7 @@ function timelineHTML(d) {
         <span class="tl-count info"><b>${levelCount.info}</b>信息</span>
       </div>
     </div>
+    ${tlPlayerHTML(d, pd)}
     <div class="tl-spark-grid">${nodes.map(n => tlSparkCard(n, d)).join('')}</div>
     <div class="tl-filters">
       <div class="tl-chip-row">${nodeChips}</div>
@@ -3112,6 +3790,28 @@ function renderTimeline() {
     ${!d ? `<div class="card empty"><h3>${busy ? '正在读取…' : '还没有事件数据'}</h3><p>事件会在节点离线或指标越过阈值时自动记录，趋势每 5 分钟落一个点</p></div>` : timelineHTML(d)}`;
   $('#tlRefresh').addEventListener('click', () => loadTimeline(true));
   if (d) {
+    const playBtn = $('#tlPlayBtn');
+    if (playBtn) playBtn.addEventListener('click', tlPlayToggle);
+    const realBtn = $('#tlRealBtn');
+    if (realBtn) realBtn.addEventListener('click', () => {
+      const pd = tlPlayData(d);
+      tlPlayPause();
+      state.tlPlay.t = pd.end;
+      tlPlayPaint();
+    });
+    $$('[data-tlspeed]').forEach(b => b.addEventListener('click', () => {
+      state.tlPlay.speed = Number(b.dataset.tlspeed) || 1;
+      $$('[data-tlspeed]').forEach(x => x.classList.toggle('active', x === b));
+      tlPlayPaint();
+    }));
+    const scrub = $('#tlScrub');
+    if (scrub) scrub.addEventListener('input', () => {
+      state.tlPlay.t = Number(scrub.value) || 0;
+      state.tlPlay.last = performance.now();
+      tlPlayPaint();
+    });
+    state.tlPlay.popKey = '';
+    tlPlayPaint();
     $$('[data-tlnode]').forEach(b => b.addEventListener('click', () => {
       state.timelineNode = b.dataset.tlnode;
       renderPage();
