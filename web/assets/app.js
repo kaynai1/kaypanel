@@ -5541,7 +5541,7 @@ function renderSettings() {
           <div class="info-row"><span>当前节点</span><span>${state.nodes.length} 台</span></div>
           <div class="info-row"><span>数据目录</span><span>${state.desktop ? 'AppData\\Roaming\\KayPanel' : 'data/'}（config.yaml、audit.log、history.json）</span></div>
           <div class="info-row"><span>手机访问</span><span>浏览器打开面板后选择「添加到主屏幕」即可像 App 一样使用</span></div>
-          <div class="info-row"><span>项目仓库</span><span><a href="https://github.com/kaynai1/kaypanel" target="_blank" rel="noreferrer">github.com/kaynai1/kaypanel</a></span></div>
+          <div class="info-row"><span>隐私</span><span>节点凭据与监控数据只保存在本机，不会上传云端</span></div>
         </div>
       </div>
     </div>`;
@@ -5813,8 +5813,8 @@ function renderNodeForm(sub) {
           </div>
           <div class="hint hidden" id="vhostHint">虚拟主机通过 SFTP 登录，只启用文件管理；系统监控、容器、终端和应用部署不可用。</div>
         </div>
-        <div class="field"><label>节点名称</label><input type="text" id="nodeName" value="${esc(n ? n.name : '')}" placeholder="如 kaynai NAS"></div>
-        <div class="field"><label>SSH 地址</label><input type="text" id="nodeAddr" value="${esc(n ? n.addr : '')}" placeholder="192.168.5.50:22"></div>
+        <div class="field"><label>节点名称</label><input type="text" id="nodeName" value="${esc(n ? n.name : '')}" placeholder="如 家里的 NAS"></div>
+        <div class="field"><label>SSH 地址</label><input type="text" id="nodeAddr" value="${esc(n ? n.addr : '')}" placeholder="192.168.1.10:22"></div>
         <div class="field"><label>SSH 用户名</label><input type="text" id="nodeUser" value="${esc(n ? n.user : '')}" placeholder="root"></div>
         <div class="field">
           <label>认证方式</label>

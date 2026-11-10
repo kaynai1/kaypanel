@@ -90,6 +90,19 @@ func versionLess(a, b string) bool {
 	return false
 }
 
+func sanitizeNotes(s string) string {
+	lines := strings.Split(strings.ReplaceAll(s, "\r\n", "\n"), "\n")
+	out := make([]string, 0, len(lines))
+	for _, line := range lines {
+		lower := strings.ToLower(line)
+		if strings.Contains(lower, "http://") || strings.Contains(lower, "https://") || strings.Contains(lower, "full changelog") {
+			continue
+		}
+		out = append(out, line)
+	}
+	return strings.TrimSpace(strings.Join(out, "\n"))
+}
+
 func (s *Server) fetchLatestRelease(ctx context.Context) (updateInfo, error) {
 	info := updateInfo{Current: s.version, HTMLURL: releasePage, Desktop: s.desktopToken != ""}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, releaseAPI, nil)
@@ -120,7 +133,7 @@ func (s *Server) fetchLatestRelease(ctx context.Context) (updateInfo, error) {
 	if info.Name == "" {
 		info.Name = "KayPanel " + rel.TagName
 	}
-	info.Notes = strings.TrimSpace(rel.Body)
+	info.Notes = sanitizeNotes(rel.Body)
 	if r := []rune(info.Notes); len(r) > 3000 {
 		info.Notes = string(r[:3000]) + "…"
 	}
