@@ -1333,7 +1333,7 @@ body.wall-mode { overflow: hidden; background: #070b14; }
 .tl-count.warn { color: var(--amber); background: var(--amber-soft); }
 .tl-count.info { color: var(--accent); background: var(--accent-soft); }
 
-.tl-spark-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
+.tl-spark-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; }
 .tl-spark { padding: 13px 15px; }
 .tl-spark-head { display: flex; align-items: center; gap: 7px; font-size: 13px; min-width: 0; }
 .tl-spark-head b { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -1341,7 +1341,8 @@ body.wall-mode { overflow: hidden; background: #070b14; }
 .tl-spark-chart { height: 54px; margin: 8px 0 6px; }
 .tl-spark-chart svg { display: block; width: 100%; height: 100%; }
 .tl-spark-empty { height: 54px; display: flex; align-items: center; justify-content: center; font-size: 11.5px; color: var(--faint); border: 1px dashed var(--line); border-radius: 8px; }
-.tl-spark-foot { display: flex; align-items: center; gap: 10px; font-size: 10.5px; color: var(--faint); }
+.tl-spark-foot { display: flex; align-items: center; gap: 10px; font-size: 10.5px; color: var(--faint); white-space: nowrap; }
+.tl-spark-foot > span:last-child { margin-left: auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .tl-leg { display: inline-flex; align-items: center; gap: 4px; }
 .tl-leg i { width: 7px; height: 7px; border-radius: 2px; display: inline-block; }
 
