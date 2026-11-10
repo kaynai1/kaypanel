@@ -700,6 +700,7 @@ button { cursor: pointer; }
 .card-head .card-ico { width: 34px; height: 34px; border-radius: 10px; background: var(--accent-soft); color: var(--accent); display: inline-flex; align-items: center; justify-content: center; flex: none; }
 .card-head .card-ico svg { width: 17px; height: 17px; }
 .card-head .card-title { min-width: 0; }
+.settings-card .card-head { justify-content: flex-start; }
 .card-head h2 { margin: 0 0 2px; }
 .card-head .sub { margin: 0; }
 .card-head + .form-grid { margin-top: 2px; }
