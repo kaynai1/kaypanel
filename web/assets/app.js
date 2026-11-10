@@ -6097,7 +6097,7 @@ function probeCardHTML(t) {
   const has = (t.checks || []).length > 0;
   const cls = !has ? 'idle' : t.up ? 'up' : 'down';
   const status = !has ? '待检测' : t.up ? '正常' : '异常';
-  const lat = t.latency_ms > 0 ? `${t.latency_ms} ms` : '—';
+  const lat = has ? `${t.latency_ms || 0} ms` : '—';
   const uptime = has ? `${(Number(t.uptime) || 0).toFixed(1)}%` : '—';
   return `<div class="card probe-card">
     <div class="probe-head">

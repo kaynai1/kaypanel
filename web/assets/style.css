@@ -2110,7 +2110,7 @@ body.dark .topo-node-off.soft { background: #18212e; }
 .batch-app .err { font-size: 11.5px; color: var(--faint); }
 .batch-app .st { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--red); }
 .batch-app .st.ok { background: var(--green); }
-.batch-res-head .dot { background: var(--red); }
+.batch-res-head .dot:not(.ok) { background: var(--red); }
 .batch-empty { grid-column: 1 / -1; padding: 22px; text-align: center; color: var(--faint); font-size: 12.5px; }
 
 body.dark .sec-count, body.dark .sec-fact, body.dark .sec-issue, body.dark .drift-group { background: #151e2b; }

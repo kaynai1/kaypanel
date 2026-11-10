@@ -61,6 +61,8 @@ echo '@@@END'
 `
 }
 
+const emptySHA = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+
 func (s *Server) handleDrift(w http.ResponseWriter, r *http.Request) {
 	views := s.mgr.Views()
 	report := driftReport{Time: time.Now().Unix(), Nodes: make([]driftNode, 0, len(views))}
@@ -106,9 +108,12 @@ func (s *Server) handleDrift(w http.ResponseWriter, r *http.Request) {
 		byHash := map[string][]string{}
 		var order []string
 		for i, v := range scan {
+			if len(hashes[i]) == 0 {
+				continue
+			}
 			h := hashes[i][dk.key]
-			if h == "" {
-				h = "unknown"
+			if h == "" || h == emptySHA {
+				h = "missing"
 			}
 			if _, ok := byHash[h]; !ok {
 				order = append(order, h)
