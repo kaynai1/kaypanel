@@ -448,7 +448,7 @@ func (s *Server) runQuery(spec querySpec, views []node.View, q string) queryResu
 			if spec.HasThreshold && val > spec.Threshold {
 				sc.row.AboveCount++
 			}
-			if spec.Mode == "stat" && !spec.HasThreshold {
+			if res.Mode == "stat" && !spec.HasThreshold {
 				if globalCount == 1 || val > globalMax {
 					globalMax, globalMaxAt = val, sp.Time
 				}
