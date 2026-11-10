@@ -114,7 +114,7 @@ func (s *Server) handleBatchExec(w http.ResponseWriter, r *http.Request) {
 			out, err := t.node.OutputCtx(ctx, cmd, 100*time.Second)
 			res.Output = truncRunes(strings.TrimSpace(out), 6000)
 			if err != nil {
-				res.Error = truncIssue(err.Error())
+				res.Error = trimIssue(err.Error())
 				return
 			}
 			res.OK = true
@@ -222,7 +222,7 @@ func (s *Server) handleBatchUpdate(w http.ResponseWriter, r *http.Request) {
 			out, err := t.node.OutputCtx(ctx, script, 600*time.Second)
 			res.Apps = parseBatchApps(out)
 			if err != nil && strings.TrimSpace(out) == "" {
-				res.Error = truncIssue(err.Error())
+				res.Error = trimIssue(err.Error())
 				return
 			}
 			if strings.Contains(out, "@@@KP_NONE") && len(res.Apps) == 0 {
@@ -321,13 +321,13 @@ func (s *Server) handleBatchUpload(w http.ResponseWriter, r *http.Request) {
 			}
 			client, err := t.node.Client()
 			if err != nil {
-				res.Error = truncIssue(err.Error())
+				res.Error = trimIssue(err.Error())
 				results[i] = res
 				return
 			}
 			sf, err := client.SFTP()
 			if err != nil {
-				res.Error = truncIssue(err.Error())
+				res.Error = trimIssue(err.Error())
 				results[i] = res
 				return
 			}
@@ -335,7 +335,7 @@ func (s *Server) handleBatchUpload(w http.ResponseWriter, r *http.Request) {
 			realDir, err := resolveExisting(sf, root, dir)
 			if err != nil {
 				client.ResetSFTP()
-				res.Error = "目录不可用: " + truncIssue(err.Error())
+				res.Error = "目录不可用: " + trimIssue(err.Error())
 				results[i] = res
 				return
 			}
@@ -346,7 +346,7 @@ func (s *Server) handleBatchUpload(w http.ResponseWriter, r *http.Request) {
 			}
 			if err := writeRemoteFile(sf, path.Join(realDir, name), string(data)); err != nil {
 				client.ResetSFTP()
-				res.Error = truncIssue(err.Error())
+				res.Error = trimIssue(err.Error())
 				results[i] = res
 				return
 			}

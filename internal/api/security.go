@@ -108,7 +108,9 @@ func levelPoints(level string) int {
 
 func addSecIssue(it *secNode, level, title, detail, fix string, score *int) {
 	it.Issues = append(it.Issues, secIssue{Level: level, Title: title, Detail: detail, Fix: fix})
-	*score -= levelPoints(level)
+	if score != nil {
+		*score -= levelPoints(level)
+	}
 }
 
 func securityOf(ctx context.Context, runner interface {
@@ -169,7 +171,7 @@ func securityOf(ctx context.Context, runner interface {
 	case "yes", "true":
 		addSecIssue(&it, "high", "允许 root 直接登录 SSH", "PermitRootLogin "+rootLogin, "改为 PermitRootLogin no，并使用普通用户 + sudo", &score)
 	case "prohibit-password", "without-password", "forced-commands-only":
-		addSecIssue(&it, "info", "root 仅允许密钥登录", "PermitRootLogin "+rootLogin)
+		addSecIssue(&it, "info", "root 仅允许密钥登录", "PermitRootLogin "+rootLogin, "", nil)
 	}
 	if passAuth == "yes" || passAuth == "true" {
 		addSecIssue(&it, "medium", "SSH 开启了密码登录", "PasswordAuthentication yes", "关闭密码登录，统一使用密钥", &score)
