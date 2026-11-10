@@ -39,6 +39,25 @@ func ChatTokens(ctx context.Context, base, key, model string, messages []Message
 	if maxTokens <= 0 {
 		maxTokens = 1500
 	}
+	content, reasoning, raw, err := chatOnce(ctx, base, key, model, messages, maxTokens)
+	if err == nil && content == "" && reasoning != "" {
+		// Reasoning models sometimes spend the whole budget on thinking and
+		// emit no content; one retry with a larger budget usually finishes.
+		if c2, _, _, err2 := chatOnce(ctx, base, key, model, messages, maxTokens*2); err2 == nil && c2 != "" {
+			return c2, nil
+		}
+		return reasoning, nil
+	}
+	if err != nil {
+		return "", err
+	}
+	if content == "" {
+		return "", fmt.Errorf("AI 返回内容为空: %s", snippet([]byte(raw)))
+	}
+	return content, nil
+}
+
+func chatOnce(ctx context.Context, base, key, model string, messages []Message, maxTokens int) (content, reasoning, rawBody string, err error) {
 	body, err := json.Marshal(map[string]any{
 		"model":       model,
 		"messages":    messages,
@@ -47,22 +66,22 @@ func ChatTokens(ctx context.Context, base, key, model string, messages []Message
 		"stream":      false,
 	})
 	if err != nil {
-		return "", err
+		return "", "", "", err
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint(base), bytes.NewReader(body))
 	if err != nil {
-		return "", err
+		return "", "", "", err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+key)
 	res, err := client.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("请求 AI 服务失败: %v", err)
+		return "", "", "", fmt.Errorf("请求 AI 服务失败: %v", err)
 	}
 	defer res.Body.Close()
 	raw, _ := io.ReadAll(io.LimitReader(res.Body, 1<<20))
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		return "", fmt.Errorf("AI 服务返回 HTTP %d: %s", res.StatusCode, snippet(raw))
+		return "", "", string(raw), fmt.Errorf("AI 服务返回 HTTP %d: %s", res.StatusCode, snippet(raw))
 	}
 	var out struct {
 		Choices []struct {
@@ -78,25 +97,18 @@ func ChatTokens(ctx context.Context, base, key, model string, messages []Message
 		} `json:"error"`
 	}
 	if err := json.Unmarshal(raw, &out); err != nil {
-		return "", fmt.Errorf("无法解析 AI 响应: %v", err)
+		return "", "", string(raw), fmt.Errorf("无法解析 AI 响应: %v", err)
 	}
 	if out.Error != nil && out.Error.Message != "" {
-		return "", fmt.Errorf("%s", out.Error.Message)
+		return "", "", string(raw), fmt.Errorf("%s", out.Error.Message)
 	}
 	if len(out.Choices) == 0 {
-		return "", fmt.Errorf("AI 返回内容为空: %s", snippet(raw))
+		return "", "", string(raw), nil
 	}
 	ch := out.Choices[0]
-	text := firstNonEmpty(
-		contentText(ch.Message.Content),
-		contentText(ch.Message.ReasoningContent),
-		strings.TrimSpace(ch.Message.Reasoning),
-		strings.TrimSpace(ch.Text),
-	)
-	if text == "" {
-		return "", fmt.Errorf("AI 返回内容为空: %s", snippet(raw))
-	}
-	return text, nil
+	content = firstNonEmpty(contentText(ch.Message.Content), strings.TrimSpace(ch.Text))
+	reasoning = firstNonEmpty(contentText(ch.Message.ReasoningContent), strings.TrimSpace(ch.Message.Reasoning))
+	return content, reasoning, string(raw), nil
 }
 
 // contentText tolerates both plain strings and multi-part content arrays,

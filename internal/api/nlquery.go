@@ -480,6 +480,13 @@ func (s *Server) runQuery(spec querySpec, views []node.View, q string) queryResu
 	res.Samples = globalCount
 	res.Nodes = len(scans)
 	if len(scans) == 0 {
+		if spec.HasThreshold && globalCount > 0 {
+			zero := 0.0
+			res.Value = &zero
+			res.Unit = "台"
+			res.Answer = buildQueryAnswer(&res)
+			return res
+		}
 		res.Answer = "该时间窗内没有采样数据；节点可能离线，或面板刚启动还在积累历史。"
 		return res
 	}
