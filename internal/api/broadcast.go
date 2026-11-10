@@ -306,7 +306,7 @@ func (s *Server) handleBroadcastGenerate(w http.ResponseWriter, r *http.Request)
 		reply, err := ai.ChatTokens(ctx, set.AIBase, set.AIKey, set.AIModel, []ai.Message{
 			{Role: "system", Content: role},
 			{Role: "user", Content: fleetFactsText(f)},
-		}, 800)
+		}, 1000)
 		if err != nil {
 			aiErr = err.Error()
 		} else if strings.TrimSpace(reply) != "" {

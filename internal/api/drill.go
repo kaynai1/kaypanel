@@ -256,7 +256,7 @@ func (s *Server) handleDrillEval(w http.ResponseWriter, r *http.Request) {
 		reply, err := ai.ChatTokens(ctx, set.AIBase, set.AIKey, set.AIModel, []ai.Message{
 			{Role: "system", Content: "你是 SRE 教官，负责点评故障演练。用中文给一段 100-160 字的点评：先肯定思路中正确的地方，再指出最关键的一条改进，最后给一句可执行的提醒。不要复述题目，不要编造系统状态，不要输出代码块或列表。"},
 			{Role: "user", Content: prompt},
-		}, 400)
+		}, 700)
 		if err != nil {
 			aiErr = err.Error()
 		} else if strings.TrimSpace(reply) != "" {

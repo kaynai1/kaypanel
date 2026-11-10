@@ -44,6 +44,7 @@ func ChatTokens(ctx context.Context, base, key, model string, messages []Message
 		"messages":    messages,
 		"temperature": 0.3,
 		"max_tokens":  maxTokens,
+		"stream":      false,
 	})
 	if err != nil {
 		return "", err
@@ -66,8 +67,11 @@ func ChatTokens(ctx context.Context, base, key, model string, messages []Message
 	var out struct {
 		Choices []struct {
 			Message struct {
-				Content string `json:"content"`
+				Content          json.RawMessage `json:"content"`
+				ReasoningContent json.RawMessage `json:"reasoning_content"`
+				Reasoning        string          `json:"reasoning"`
 			} `json:"message"`
+			Text string `json:"text"`
 		} `json:"choices"`
 		Error *struct {
 			Message string `json:"message"`
@@ -79,10 +83,59 @@ func ChatTokens(ctx context.Context, base, key, model string, messages []Message
 	if out.Error != nil && out.Error.Message != "" {
 		return "", fmt.Errorf("%s", out.Error.Message)
 	}
-	if len(out.Choices) == 0 || strings.TrimSpace(out.Choices[0].Message.Content) == "" {
-		return "", fmt.Errorf("AI 返回内容为空")
+	if len(out.Choices) == 0 {
+		return "", fmt.Errorf("AI 返回内容为空: %s", snippet(raw))
 	}
-	return strings.TrimSpace(out.Choices[0].Message.Content), nil
+	ch := out.Choices[0]
+	text := firstNonEmpty(
+		contentText(ch.Message.Content),
+		contentText(ch.Message.ReasoningContent),
+		strings.TrimSpace(ch.Message.Reasoning),
+		strings.TrimSpace(ch.Text),
+	)
+	if text == "" {
+		return "", fmt.Errorf("AI 返回内容为空: %s", snippet(raw))
+	}
+	return text, nil
+}
+
+// contentText tolerates both plain strings and multi-part content arrays,
+// which some OpenAI-compatible gateways emit.
+func contentText(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		return strings.TrimSpace(s)
+	}
+	var parts []struct {
+		Text    string `json:"text"`
+		Content string `json:"content"`
+	}
+	if err := json.Unmarshal(raw, &parts); err == nil {
+		var sb strings.Builder
+		for _, p := range parts {
+			v := p.Text
+			if v == "" {
+				v = p.Content
+			}
+			if v != "" {
+				sb.WriteString(v)
+			}
+		}
+		return strings.TrimSpace(sb.String())
+	}
+	return ""
+}
+
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if strings.TrimSpace(v) != "" {
+			return strings.TrimSpace(v)
+		}
+	}
+	return ""
 }
 
 func modelsEndpoint(base string) string {

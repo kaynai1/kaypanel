@@ -384,7 +384,7 @@ func (s *Server) handleRootCauseAI(w http.ResponseWriter, r *http.Request) {
 	reply, err := ai.ChatTokens(ctx, set.AIBase, set.AIKey, set.AIModel, []ai.Message{
 		{Role: "system", Content: "你是资深 SRE，负责做跨节点根因分析。只依据给出的信号与关联结果作答，不要编造系统状态。用中文输出 250-400 字：先给最可能的根因假设（按可能性排序），再说明判断依据，最后给出 2-3 条只读的排查命令或动作。不要输出代码块。"},
 		{Role: "user", Content: rcReportText(rep)},
-	}, 900)
+	}, 1200)
 	if err != nil {
 		writeErr(w, http.StatusBadGateway, err.Error())
 		return
