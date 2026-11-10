@@ -17,10 +17,12 @@ import (
 	"time"
 
 	"kaypanel/internal/audit"
+	"kaypanel/internal/changes"
 	"kaypanel/internal/config"
 	"kaypanel/internal/instabox"
 	"kaypanel/internal/metrics"
 	"kaypanel/internal/node"
+	"kaypanel/internal/probe"
 )
 
 const sessionCookie = "kp_session"
@@ -33,11 +35,13 @@ type Server struct {
 	version  string
 	sessions *sessions
 	limiter  *loginLimiter
+	probes   *probe.Manager
+	changes  *changes.Manager
 
 	desktopToken string
 }
 
-func New(store *config.Store, mgr *node.Manager, auditLog *audit.Log, web http.FileSystem, version string) *Server {
+func New(store *config.Store, mgr *node.Manager, auditLog *audit.Log, web http.FileSystem, version string, probes *probe.Manager, changeLog *changes.Manager) *Server {
 	return &Server{
 		store:    store,
 		mgr:      mgr,
@@ -46,6 +50,8 @@ func New(store *config.Store, mgr *node.Manager, auditLog *audit.Log, web http.F
 		version:  version,
 		sessions: newSessions(store.SessionSecret()),
 		limiter:  newLoginLimiter(),
+		probes:   probes,
+		changes:  changeLog,
 	}
 }
 
@@ -78,6 +84,26 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/audit", s.auth(s.handleAudit))
 	mux.Handle("GET /api/overview", s.auth(s.handleOverview))
 	mux.Handle("GET /api/templates", s.auth(s.handleTemplates))
+
+	mux.Handle("GET /api/security", s.auth(s.handleSecurity))
+	mux.Handle("GET /api/cost", s.auth(s.handleCost))
+	mux.Handle("POST /api/cost/price", s.auth(s.handleCostPrice))
+	mux.Handle("POST /api/nodes/{id}/power", s.auth(s.handleNodePower))
+	mux.Handle("GET /api/netmatrix", s.auth(s.handleNetMatrix))
+	mux.Handle("GET /api/drift", s.auth(s.handleDrift))
+	mux.Handle("GET /api/probes", s.auth(s.handleProbes))
+	mux.Handle("POST /api/probes", s.auth(s.handleProbeAdd))
+	mux.Handle("DELETE /api/probes/{id}", s.auth(s.handleProbeDelete))
+	mux.Handle("POST /api/probes/{id}/check", s.auth(s.handleProbeCheck))
+	mux.Handle("GET /api/changes", s.auth(s.handleChanges))
+	mux.Handle("GET /api/changes/{id}", s.auth(s.handleChangeGet))
+	mux.Handle("POST /api/changes/{id}/rollback", s.auth(s.handleChangeRollback))
+	mux.Handle("POST /api/batch/exec", s.auth(s.handleBatchExec))
+	mux.Handle("POST /api/batch/update", s.auth(s.handleBatchUpdate))
+	mux.Handle("POST /api/batch/upload", s.auth(s.handleBatchUpload))
+
+	mux.HandleFunc("GET /api/status", s.handlePublicStatusAPI)
+	mux.HandleFunc("GET /status", s.handlePublicStatusPage)
 
 	mux.Handle("GET /api/ssh/discover", s.auth(s.handleSSHDiscover))
 	mux.Handle("GET /api/nodes", s.auth(s.handleNodes))
@@ -386,6 +412,7 @@ func (s *Server) handleSetSettings(w http.ResponseWriter, r *http.Request) {
 		DiskAlert:   req.DiskAlert,
 		DailyReport: req.DailyReport,
 		DailyHour:   req.DailyHour,
+		CostPerKWh:  old.CostPerKWh,
 	}
 	cfg.Webhook = old.Webhook
 	if req.ClearWebhook {

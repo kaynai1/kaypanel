@@ -417,6 +417,13 @@ func (s *Server) handleStackSave(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	target := path.Join(dir, file)
+	before := ""
+	if fh, err := sf.Open(target); err == nil {
+		if b, rerr := io.ReadAll(io.LimitReader(fh, 1<<20)); rerr == nil {
+			before = string(b)
+		}
+		fh.Close()
+	}
 	tmp := target + ".kptmp"
 	fh, err := sf.OpenFile(tmp, os.O_CREATE|os.O_TRUNC|os.O_WRONLY)
 	if err != nil {
@@ -440,6 +447,10 @@ func (s *Server) handleStackSave(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusBadGateway, "保存失败: "+err.Error())
 			return
 		}
+	}
+	if s.changes != nil {
+		cfg := n.Config()
+		s.changes.Add("stack", cfg.ID, cfg.Name, target, "应用 "+name+" 的 Compose 配置", before, req.Content)
 	}
 	s.audit.Add("admin", n.Config().ID, "保存应用", name)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "file": file})

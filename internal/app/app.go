@@ -14,8 +14,10 @@ import (
 	"kaypanel/internal/alert"
 	"kaypanel/internal/api"
 	"kaypanel/internal/audit"
+	"kaypanel/internal/changes"
 	"kaypanel/internal/config"
 	"kaypanel/internal/node"
+	"kaypanel/internal/probe"
 )
 
 type Options struct {
@@ -35,6 +37,7 @@ type Instance struct {
 	DesktopToken    string
 
 	alertCancel context.CancelFunc
+	probeCancel context.CancelFunc
 	httpSrv     *http.Server
 }
 
@@ -53,8 +56,12 @@ func Start(opts Options) (*Instance, error) {
 	alertCtx, alertCancel := context.WithCancel(context.Background())
 	alert.New(store, mgr).Start(alertCtx)
 
-	srv := api.New(store, mgr, auditLog, http.FS(opts.Web), opts.Version)
-	inst := &Instance{Store: store, Manager: mgr, InitialPassword: initialPassword, alertCancel: alertCancel}
+	probeMgr := probe.New(store.Dir())
+	probeCtx, probeCancel := context.WithCancel(context.Background())
+	probeMgr.Start(probeCtx)
+	changeLog := changes.New(store.Dir())
+	srv := api.New(store, mgr, auditLog, http.FS(opts.Web), opts.Version, probeMgr, changeLog)
+	inst := &Instance{Store: store, Manager: mgr, InitialPassword: initialPassword, alertCancel: alertCancel, probeCancel: probeCancel}
 	if opts.Desktop {
 		inst.DesktopToken = config.RandomHex(24)
 		srv.EnableDesktop(inst.DesktopToken)
@@ -67,6 +74,7 @@ func Start(opts Options) (*Instance, error) {
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		alertCancel()
+		probeCancel()
 		mgr.Stop()
 		return nil, fmt.Errorf("监听 %s 失败: %w", addr, err)
 	}
@@ -101,6 +109,9 @@ func publicURL(addr string) string {
 func (i *Instance) Shutdown(ctx context.Context) {
 	if i.alertCancel != nil {
 		i.alertCancel()
+	}
+	if i.probeCancel != nil {
+		i.probeCancel()
 	}
 	if i.httpSrv != nil {
 		_ = i.httpSrv.Shutdown(ctx)

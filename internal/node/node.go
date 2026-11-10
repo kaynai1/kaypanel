@@ -209,6 +209,17 @@ func (m *Manager) Update(id string, patch config.Node) error {
 	return nil
 }
 
+func (m *Manager) SetPower(id string, watts float64) error {
+	n, ok := m.Get(id)
+	if !ok {
+		return fmt.Errorf("节点不存在")
+	}
+	n.mu.Lock()
+	n.cfg.PowerWatts = watts
+	n.mu.Unlock()
+	return m.persist()
+}
+
 func (m *Manager) Delete(id string) error {
 	n, ok := m.Get(id)
 	if !ok {

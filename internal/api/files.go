@@ -564,6 +564,15 @@ func (s *Server) handleFileWrite(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	before := ""
+	if st, serr := sf.Stat(real); serr == nil && !st.IsDir() && st.Size() <= 2<<20 {
+		if fh, oerr := sf.Open(real); oerr == nil {
+			if b, rerr := io.ReadAll(io.LimitReader(fh, 2<<20)); rerr == nil {
+				before = string(b)
+			}
+			fh.Close()
+		}
+	}
 	tmp := real + ".kptmp"
 	fh, err := sf.OpenFile(tmp, os.O_CREATE|os.O_TRUNC|os.O_WRONLY)
 	if err != nil {
@@ -587,6 +596,10 @@ func (s *Server) handleFileWrite(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusBadGateway, "保存失败: "+err.Error())
 			return
 		}
+	}
+	if s.changes != nil {
+		cfg := n.Config()
+		s.changes.Add("file", cfg.ID, cfg.Name, p, "文件 "+p, before, req.Content)
 	}
 	s.audit.Add("admin", n.Config().ID, "编辑文件", p)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})

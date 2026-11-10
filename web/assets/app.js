@@ -1,6 +1,6 @@
 'use strict';
 
-const TOP_PAGES = ['overview', 'topology', 'personality', 'timeline', 'stocks', 'park', 'containers', 'apps', 'files', 'terminal', 'ai', 'settings'];
+const TOP_PAGES = ['overview', 'topology', 'netmatrix', 'security', 'personality', 'timeline', 'probes', 'batch', 'changes', 'drift', 'stocks', 'park', 'containers', 'apps', 'files', 'terminal', 'ai', 'cost', 'settings'];
 const $ = (sel, el = document) => el.querySelector(sel);
 const $$ = (sel, el = document) => Array.from(el.querySelectorAll(sel));
 
@@ -75,6 +75,28 @@ const state = {
   autoRefresh: prefOn('kp_auto'),
   procOn: prefOn('kp_proc'),
   alertOn: prefOn('kp_alert'),
+  security: null,
+  securityBusy: false,
+  securityError: '',
+  cost: null,
+  costBusy: false,
+  costError: '',
+  netmatrix: null,
+  netmatrixBusy: false,
+  netmatrixError: '',
+  probes: null,
+  probesBusy: false,
+  probesError: '',
+  changes: null,
+  changesBusy: false,
+  changesError: '',
+  drift: null,
+  driftBusy: false,
+  driftError: '',
+  batchTab: 'exec',
+  batchSel: {},
+  batchResults: null,
+  batchBusy: false,
 };
 
 function prefOn(key) {
@@ -125,6 +147,13 @@ const ICON_PATHS = {
   sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
   trophy: '<path d="M8 3h8v5a4 4 0 0 1-8 0V3Z"/><path d="M8 4H5v2a3 3 0 0 0 3 3M16 4h3v2a3 3 0 0 1-3 3"/><path d="M12 12v5M8 21h8M10 17h4"/>',
   search: '<circle cx="11" cy="11" r="6.5"/><path d="m16 16 5 5"/>',
+  shield: '<path d="M12 3 4.5 6v5.5c0 4.4 3.1 8.4 7.5 9.5 4.4-1.1 7.5-5.1 7.5-9.5V6L12 3Z"/><path d="m8.8 12 2.2 2.2 4.4-4.4"/>',
+  network: '<circle cx="12" cy="12" r="3"/><circle cx="12" cy="3.5" r="1.5"/><circle cx="12" cy="20.5" r="1.5"/><circle cx="3.5" cy="12" r="1.5"/><circle cx="20.5" cy="12" r="1.5"/><path d="M12 5v4M12 15v4M5 12h4M15 12h4"/>',
+  probe: '<circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="4.5"/><path d="m12 12 5.7-5.7"/><circle cx="12" cy="12" r="1"/>',
+  history: '<path d="M3.5 12a8.5 8.5 0 1 0 2.8-6.3"/><path d="M3.5 4.2V9H8"/><path d="M12 7.5V12l3 1.8"/>',
+  batch: '<rect x="3" y="3" width="7.5" height="7.5" rx="1.6"/><rect x="13.5" y="3" width="7.5" height="7.5" rx="1.6"/><rect x="3" y="13.5" width="7.5" height="7.5" rx="1.6"/><rect x="13.5" y="13.5" width="7.5" height="7.5" rx="1.6"/>',
+  coin: '<ellipse cx="12" cy="6.2" rx="7" ry="3"/><path d="M5 6.2v5.2c0 1.7 3.1 3 7 3s7-1.3 7-3V6.2"/><path d="M5 11.4v5.2c0 1.7 3.1 3 7 3s7-1.3 7-3v-5.2"/>',
+  diff: '<circle cx="6.5" cy="6" r="2.2"/><circle cx="17.5" cy="6" r="2.2"/><circle cx="12" cy="18" r="2.2"/><path d="M8.7 6h6.6M7.6 8l3.4 7.8M16.4 8l-3.4 7.8"/>',
 };
 
 function ico(name, cls = '') {
@@ -369,11 +398,17 @@ function renderShell() {
         <div class="nav-group">监控</div>
         <button class="nav-item" data-page="overview">${ico('overview')}<span>概览</span></button>
         <button class="nav-item" data-page="topology">${ico('topology')}<span>机房拓扑</span></button>
+        <button class="nav-item" data-page="netmatrix">${ico('network')}<span>网络质量</span></button>
+        <button class="nav-item" data-page="security">${ico('shield')}<span>安全体检</span></button>
         <button class="nav-item" data-page="personality">${ico('heart')}<span>性格周报</span></button>
         <button class="nav-item" data-page="timeline">${ico('clock')}<span>故障回放</span></button>
         <button class="nav-item" data-page="containers">${ico('container')}<span>容器</span><span class="nav-badge hidden" id="navCtrBadge"></span></button>
         <button class="nav-item" data-page="apps">${ico('app')}<span>应用</span></button>
         <div class="nav-group">工具</div>
+        <button class="nav-item" data-page="probes">${ico('probe')}<span>拨测状态</span></button>
+        <button class="nav-item" data-page="batch">${ico('batch')}<span>批量操作</span></button>
+        <button class="nav-item" data-page="changes">${ico('history')}<span>变更记录</span></button>
+        <button class="nav-item" data-page="drift">${ico('diff')}<span>配置漂移</span></button>
         <button class="nav-item" data-page="files">${ico('folder')}<span>文件</span></button>
         <button class="nav-item" data-page="terminal">${ico('terminal')}<span>终端</span></button>
         <button class="nav-item" data-page="ai">${ico('spark')}<span>AI 助手</span></button>
@@ -381,6 +416,7 @@ function renderShell() {
         <button class="nav-item" data-page="stocks">${ico('stocks')}<span>行情</span></button>
         <button class="nav-item" data-page="park">${ico('park')}<span>服务器乐园</span></button>
         <div class="nav-group">系统</div>
+        <button class="nav-item" data-page="cost">${ico('coin')}<span>电费账本</span></button>
         <button class="nav-item" data-page="settings">${ico('settings')}<span>设置</span></button>
       </nav>
       <div class="side-foot">
@@ -495,6 +531,13 @@ function refreshCurrentPage() {
   switch (state.page) {
     case 'overview': loadOverview(true); loadProcesses(); break;
     case 'topology': loadTopology(true); break;
+    case 'netmatrix': loadNetMatrix(true); break;
+    case 'security': loadSecurity(true); break;
+    case 'probes': loadProbes(true); break;
+    case 'changes': loadChanges(true); break;
+    case 'drift': loadDrift(true); break;
+    case 'cost': loadCost(true); break;
+    case 'batch': renderPage(); break;
     case 'personality': loadPersonality(true); break;
     case 'timeline': loadTimeline(true); break;
     case 'stocks': loadStocks(); break;
@@ -663,6 +706,13 @@ function renderPage() {
   switch (state.page) {
     case 'overview': return renderOverview();
     case 'topology': return renderTopology();
+    case 'netmatrix': return renderNetMatrix();
+    case 'security': return renderSecurity();
+    case 'probes': return renderProbes();
+    case 'changes': return renderChanges();
+    case 'drift': return renderDrift();
+    case 'batch': return renderBatch();
+    case 'cost': return renderCost();
     case 'personality': return renderPersonality();
     case 'timeline': return renderTimeline();
     case 'stocks': return renderStocks();
@@ -3968,6 +4018,13 @@ function renderAmbient() {
 const PALETTE_PAGES = [
   ['overview', '概览', '节点状态与资源趋势', 'overview'],
   ['topology', '机房拓扑', '可视化机房连接', 'topology'],
+  ['netmatrix', '网络质量', '节点间延迟与丢包矩阵', 'network'],
+  ['security', '安全体检', 'SSH / 防火墙 / 证书检查', 'shield'],
+  ['probes', '拨测状态', '网站与端口可用性 + 公开状态页', 'probe'],
+  ['changes', '变更记录', '文件与应用修改回滚', 'history'],
+  ['drift', '配置漂移', '对比节点关键配置差异', 'diff'],
+  ['batch', '批量操作', '多机命令 / 更新 / 分发', 'batch'],
+  ['cost', '电费账本', '功率与电费估算', 'coin'],
   ['personality', '性格周报', '服务器性格与周报', 'heart'],
   ['timeline', '故障回放', '回放历史事件时间轴', 'clock'],
   ['stocks', '行情', '服务器健康度股票行情', 'stocks'],
@@ -5742,6 +5799,732 @@ function renderNodeForm(sub) {
 
   $('#nodeSave').addEventListener('click', () => save(false));
   $('#nodeSaveTest').addEventListener('click', () => save(true));
+}
+
+/* ---------- batch 2: security, cost, netmatrix, probes, changes, batch ---------- */
+
+const SEC_LEVEL_LABELS = { critical: '严重', high: '高风险', medium: '中风险', low: '低风险', info: '提示' };
+const SEC_GRADE_TONES = { '优秀': 'ok', '良好': 'good', '一般': 'fair', '需关注': 'bad', '离线': 'off', '不扫描': 'info', '扫描失败': 'bad' };
+const SEC_GRADE_COLORS = { '优秀': '#16a34a', '良好': '#2563eb', '一般': '#d97706', '需关注': '#dc2626', '离线': '#64748b', '不扫描': '#0891b2', '扫描失败': '#dc2626' };
+
+function secTone(grade) { return SEC_GRADE_TONES[grade] || 'off'; }
+function secGradeColor(grade) { return SEC_GRADE_COLORS[grade] || '#64748b'; }
+function secLevelLabel(lv) { return SEC_LEVEL_LABELS[lv] || '提示'; }
+function fmtMoney(v) { return '¥' + (Number(v) || 0).toFixed(2); }
+
+function secRootText(v) {
+  switch (v) {
+    case 'yes': case 'true': return '允许';
+    case 'no': case 'false': return '禁止';
+    case 'prohibit-password': case 'without-password': return '仅密钥';
+    case 'forced-commands-only': return '仅命令';
+    default: return v || '—';
+  }
+}
+
+function loadSecurity(force) {
+  if (state.securityBusy) return;
+  state.securityBusy = true;
+  state.securityError = '';
+  if (state.page === 'security' && !state.subview) renderPage();
+  api('/api/security').then(d => {
+    state.security = d;
+  }).catch(e => {
+    state.securityError = e.message;
+    if (force) toast(e.message, 'error');
+  }).finally(() => {
+    state.securityBusy = false;
+    if (state.page === 'security' && !state.subview) renderPage();
+  });
+  if (force) toast('正在重新体检…', '', 1600);
+}
+
+function secIssueHTML(is) {
+  return `<div class="sec-issue">
+    <span class="lv sec-lv-${esc(is.level)}">${secLevelLabel(is.level)}</span>
+    <div class="main"><b>${esc(is.title)}</b>${is.detail ? `<span>${esc(is.detail)}</span>` : ''}${is.fix ? `<em>建议：${esc(is.fix)}</em>` : ''}</div>
+  </div>`;
+}
+
+function secNodeCard(it) {
+  const head = `<div class="sec-head">
+    <span class="avatar" style="background:${avatarColor(it.id)}">${esc(initialOf(it.name))}</span>
+    <div class="sec-head-main"><b>${esc(it.name)}</b><span>${esc(it.user || '')}@${esc(it.addr)}</span></div>
+    <div class="sec-score"><b style="color:${secGradeColor(it.grade)}">${it.sftp_only ? '—' : it.score}</b><span>${esc(it.grade)}</span></div>
+  </div>`;
+  if (it.sftp_only) {
+    return `<div class="card sec-card">${head}<div class="sec-issues"><div class="sec-issue">
+      <span class="lv sec-lv-info">提示</span>
+      <div class="main"><b>跳过安全扫描</b><span>SFTP 虚拟主机无法读取系统配置，建议在服务商控制台检查安全组与密钥。</span></div>
+    </div></div></div>`;
+  }
+  if (!it.online) {
+    return `<div class="card sec-card">${head}<div class="sec-issues">${(it.issues || []).map(secIssueHTML).join('') ||
+      '<div class="sec-issue"><span class="lv sec-lv-low">低风险</span><div class="main"><b>节点离线</b><span>无法连接，体检未执行</span></div></div>'}</div></div>`;
+  }
+  const facts = [
+    ['SSH 端口', it.ssh_port || '—', ''],
+    ['root 登录', secRootText(it.root_login), it.root_login === 'yes' ? 'warn' : ''],
+    ['密码登录', it.password_auth === 'yes' ? '开启' : it.password_auth === 'no' ? '关闭' : (it.password_auth || '—'), it.password_auth === 'yes' ? 'warn' : ''],
+    ['防火墙', it.firewall === 'active' ? '已启用' : it.firewall === 'inactive' ? '未启用' : '未知', it.firewall === 'inactive' ? 'warn' : ''],
+    ['公网容器端口', String(it.public_ports || 0), it.public_ports > 0 ? 'warn' : ''],
+    ['证书剩余', it.cert_days > 0 ? it.cert_days + ' 天' : '未检测到', it.cert_days > 0 && it.cert_days < 30 ? 'warn' : ''],
+  ];
+  const issues = (it.issues || []).length
+    ? it.issues.map(secIssueHTML).join('')
+    : `<div class="sec-issue"><span class="lv sec-lv-info">通过</span><div class="main"><b>未发现明显风险</b><span>保持定期体检与系统更新。</span></div></div>`;
+  return `<div class="card sec-card">${head}
+    <div class="sec-facts">${facts.map(([label, value, cls]) => `<div class="sec-fact"><span>${label}</span><b class="${cls}">${esc(value)}</b></div>`).join('')}</div>
+    <div class="sec-issues">${issues}</div>
+  </div>`;
+}
+
+function secReportHTML(d) {
+  const counts = d.counts || {};
+  const chip = g => `<span class="sec-count tone-${secTone(g)}"><i></i>${esc(g)} <b>${counts[g] || 0}</b></span>`;
+  return `<div class="card sec-hero">
+    <div class="insp-ring" style="--pct:${Math.max(0, Math.min(100, d.average))};--tone:${secGradeColor(d.grade)}">
+      <div class="insp-ring-in"><b>${d.average}</b><span>平均安全分</span></div>
+    </div>
+    <div class="sec-hero-main">
+      <div class="sec-hero-title">整体安全态势 <span class="insp-pill tone-${secTone(d.grade)}">${esc(d.grade)}</span></div>
+      <p class="page-sub" style="margin-top:8px">${d.total} 台节点，${d.online} 台在线。评分从 100 起按风险项扣分，SFTP 虚拟主机不参与扫描。</p>
+      <div class="sec-counts">${['优秀', '良好', '一般', '需关注'].map(chip).join('')}</div>
+    </div>
+    <div class="insp-time">体检时间<br><b>${fmtTime(d.time)}</b></div>
+  </div>
+  <div class="sec-grid">${(d.nodes || []).map(secNodeCard).join('') || '<div class="card empty"><h3>还没有节点</h3><p>添加服务器后即可体检</p></div>'}</div>
+  <p class="stock-note">安全体检只读取配置，不会修改任何系统设置；修复项请人工确认后执行。</p>`;
+}
+
+function renderSecurity() {
+  const page = $('#page');
+  if (!page) return;
+  const d = state.security;
+  page.innerHTML = `
+    <section class="page-head">
+      <div><h1>安全体检</h1><p class="page-sub">检查 SSH 配置、防火墙、暴露端口与证书有效期，给出可执行的修复建议</p></div>
+      <div class="head-actions"><button class="btn sm ghost" id="secRefresh" ${state.securityBusy ? 'disabled' : ''}>${d ? '重新体检' : '开始体检'}</button></div>
+    </section>
+    ${state.securityBusy && !d ? '<div class="card empty"><h3>正在体检…</h3><p>并发读取每台节点的 SSH、防火墙与证书信息，约需 10-30 秒</p></div>' : ''}
+    ${state.securityError && !d ? `<div class="card empty"><h3>体检失败</h3><p>${esc(state.securityError)}</p></div>` : ''}
+    ${d ? secReportHTML(d) : ''}`;
+  $('#secRefresh').addEventListener('click', () => loadSecurity(true));
+  if (!d && !state.securityBusy && !state.securityError) setTimeout(() => { if (state.page === 'security' && !state.subview) loadSecurity(false); }, 0);
+}
+
+function loadCost(force) {
+  if (state.costBusy) return;
+  state.costBusy = true;
+  state.costError = '';
+  if (state.page === 'cost' && !state.subview) renderPage();
+  api('/api/cost').then(d => {
+    state.cost = d;
+  }).catch(e => {
+    state.costError = e.message;
+    if (force) toast(e.message, 'error');
+  }).finally(() => {
+    state.costBusy = false;
+    if (state.page === 'cost' && !state.subview) renderPage();
+  });
+}
+
+function costRowHTML(n) {
+  const money = v => n.watts > 0 ? fmtMoney(v) : '—';
+  return `<tr>
+    <td><div class="cost-node-name"><span class="avatar" style="background:${avatarColor(n.id)}">${esc(initialOf(n.name))}</span>
+      <div><b>${esc(n.name)}</b><div class="chg-sub">${n.sftp_only ? '虚拟主机' : n.online ? '在线' : '离线'}</div></div></div></td>
+    <td>${n.sftp_only ? '<span class="muted">—</span>' : `<input class="cost-watts" type="number" min="0" max="5000" step="1" value="${n.watts || ''}" placeholder="0" data-power-node="${esc(n.id)}">`}</td>
+    <td class="num">${n.watts > 0 ? (Number(n.kwh_day) || 0).toFixed(2) + ' kWh' : '—'}</td>
+    <td class="num">${money(n.cost_day)}</td>
+    <td class="num">${money(n.cost_month)}</td>
+    <td class="num">${money(n.cost_year)}</td>
+    <td class="num">${n.sftp_only ? '' : `<button class="btn sm ghost watt-save" data-power-save="${esc(n.id)}">保存</button>`}</td>
+  </tr>`;
+}
+
+function renderCost() {
+  const page = $('#page');
+  if (!page) return;
+  const d = state.cost;
+  page.innerHTML = `
+    <section class="page-head">
+      <div><h1>成本电费账本</h1><p class="page-sub">给每台节点填上功率，自动估算每天、每月、每年的电费</p></div>
+      <div class="head-actions"><button class="btn sm ghost" id="costRefresh">刷新</button></div>
+    </section>
+    ${!d ? `<div class="card empty">${state.costBusy ? '正在计算…' : state.costError ? esc(state.costError) : '暂无数据'}</div>` : `
+    <div class="card cost-price">
+      <div class="field"><label>电价（元 / 度）</label><input id="costPrice" type="number" step="0.01" min="0.05" max="20" value="${d.price}"></div>
+      <button class="btn primary" id="costPriceSave">保存电价</button>
+      <span class="muted">国内居民电价通常在 0.5-0.8 元/度，可按实际账单调整</span>
+    </div>
+    <div class="stat-grid">
+      <div class="stat-card"><div class="stat-label">总功耗</div><div class="stat-value">${d.total_watts}<small>W</small></div><div class="stat-sub">${d.configured} 台已配置 / ${d.unconfigured} 台待填</div></div>
+      <div class="stat-card"><div class="stat-label">今日用电</div><div class="stat-value">${d.kwh_today}<small>kWh</small></div><div class="stat-sub">按当前功率估算</div></div>
+      <div class="stat-card"><div class="stat-label">今日电费</div><div class="stat-value">${fmtMoney(d.cost_today)}</div><div class="stat-sub">${d.price} 元/度</div></div>
+      <div class="stat-card"><div class="stat-label">本月 / 全年</div><div class="stat-value">${fmtMoney(d.cost_month)}</div><div class="stat-sub">全年约 ${fmtMoney(d.cost_year)}</div></div>
+    </div>
+    <div class="card table-wrap">
+      <table class="table">
+        <thead><tr><th>节点</th><th>功率（W）</th><th class="num">日耗电</th><th class="num">日费用</th><th class="num">月费用</th><th class="num">年费用</th><th></th></tr></thead>
+        <tbody>${(d.nodes || []).map(costRowHTML).join('') || '<tr><td colspan="7" class="muted">尚未添加节点</td></tr>'}</tbody>
+      </table>
+    </div>
+    <p class="stock-note">耗电按 24 小时满载估算，实际功耗会随负载浮动；未配置功率的节点不计入合计。</p>`}`;
+  $('#costRefresh').addEventListener('click', () => loadCost(true));
+  if (d) {
+    $('#costPriceSave').addEventListener('click', async () => {
+      const price = Number($('#costPrice').value);
+      if (!(price >= 0.05 && price <= 20)) return toast('电价需在 0.05-20 元/度之间', 'error');
+      const btn = $('#costPriceSave');
+      btn.disabled = true;
+      try {
+        await api('/api/cost/price', { method: 'POST', body: JSON.stringify({ price }) });
+        toast('电价已保存', 'success');
+        loadCost(true);
+      } catch (e) { toast(e.message, 'error'); btn.disabled = false; }
+    });
+    $$('[data-power-save]', page).forEach(btn => btn.addEventListener('click', async () => {
+      const id = btn.dataset.powerSave;
+      const input = $(`.cost-watts[data-power-node="${id}"]`, page);
+      if (!input) return;
+      const watts = Number(input.value) || 0;
+      btn.disabled = true;
+      try {
+        await api('/api/nodes/' + encodeURIComponent(id) + '/power', { method: 'POST', body: JSON.stringify({ watts }) });
+        toast('功率已保存', 'success');
+        loadCost(true);
+      } catch (e) { toast(e.message, 'error'); btn.disabled = false; }
+    }));
+  } else if (!state.costBusy && !state.costError) {
+    setTimeout(() => { if (state.page === 'cost' && !state.subview) loadCost(false); }, 0);
+  }
+}
+
+function loadNetMatrix(force) {
+  if (state.netmatrixBusy) return;
+  state.netmatrixBusy = true;
+  state.netmatrixError = '';
+  if (state.page === 'netmatrix' && !state.subview) renderPage();
+  api('/api/netmatrix').then(d => {
+    state.netmatrix = d;
+  }).catch(e => {
+    state.netmatrixError = e.message;
+    if (force) toast(e.message, 'error');
+  }).finally(() => {
+    state.netmatrixBusy = false;
+    if (state.page === 'netmatrix' && !state.subview) renderPage();
+  });
+  if (force) toast('正在从各节点互相 ping…', '', 2000);
+}
+
+function nmCellHTML(i, j, nodes, latency, loss) {
+  if (i === j) return '<td class="nm-self">—</td>';
+  const a = nodes[i] || {}, b = nodes[j] || {};
+  if (!a.online || !b.online) return '<td><span class="nm-cell nm-off"><b>—</b><span>离线</span></span></td>';
+  const lat = latency[i] ? latency[i][j] : -1;
+  const ls = loss[i] ? loss[i][j] : -1;
+  if (lat == null || lat < 0) {
+    return `<td><span class="nm-cell nm-bad"><b>不可达</b><span>${ls > 0 ? ls.toFixed(0) + '% 丢包' : '无响应'}</span></span></td>`;
+  }
+  let cls = 'nm-good';
+  if (lat >= 120 || ls >= 20) cls = 'nm-bad';
+  else if (lat >= 40 || ls > 0) cls = 'nm-warn';
+  else if (lat >= 20) cls = 'nm-mid';
+  return `<td><span class="nm-cell ${cls}"><b>${lat.toFixed(1)}ms</b><span>${Math.max(0, ls).toFixed(0)}% 丢包</span></span></td>`;
+}
+
+function netMatrixHTML(d) {
+  const nodes = d.nodes || [];
+  const latency = d.latency || [];
+  const loss = d.loss || [];
+  if (!nodes.length) return '<div class="card empty"><h3>还没有节点</h3><p>至少添加两台物理机才能测量节点间网络质量</p></div>';
+  const head = nodes.map(n => `<th class="${n.online ? '' : 'nm-th-off'}">${esc(n.name)}</th>`).join('');
+  const rows = nodes.map((n, i) => `<tr><th>${esc(n.name)}</th>${nodes.map((m, j) => nmCellHTML(i, j, nodes, latency, loss)).join('')}</tr>`).join('');
+  const online = nodes.filter(n => n.online).length;
+  return `<div class="card table-wrap nm-wrap">
+    <div class="nm-head"><b>节点互通矩阵</b><span>每格为源节点 → 目标节点的 ping 延迟 / 丢包，最多同时测量 8 台在线节点</span></div>
+    <table class="table nm-table"><thead><tr><th>源 \\ 目标</th>${head}</tr></thead><tbody>${rows}</tbody></table>
+  </div>
+  <div class="nm-legend">
+    <span><i class="nm-good"></i>&lt; 20ms 极佳</span>
+    <span><i class="nm-mid"></i>20-40ms 良好</span>
+    <span><i class="nm-warn"></i>40-120ms 偏慢</span>
+    <span><i class="nm-bad"></i>丢包 / 不可达</span>
+    <span class="muted">${online}/${nodes.length} 台在线</span>
+  </div>
+  <p class="stock-note">测量从各节点服务器发起，反映真实机器间的网络路径；需要节点安装 iputils-ping（多数系统已自带）。</p>`;
+}
+
+function renderNetMatrix() {
+  const page = $('#page');
+  if (!page) return;
+  const d = state.netmatrix;
+  page.innerHTML = `
+    <section class="page-head">
+      <div><h1>网络质量矩阵</h1><p class="page-sub">让每台服务器互相 ping，一眼看出机房内网与跨区域的延迟、丢包</p></div>
+      <div class="head-actions"><button class="btn sm ghost" id="nmRefresh" ${state.netmatrixBusy ? 'disabled' : ''}>${state.netmatrixBusy ? '测量中…' : '重新测量'}</button></div>
+    </section>
+    ${state.netmatrixBusy && !d ? '<div class="card empty"><h3>正在测量…</h3><p>每台节点依次 ping 其他节点，约需 10-40 秒</p></div>' : ''}
+    ${state.netmatrixError && !d ? `<div class="card empty"><h3>测量失败</h3><p>${esc(state.netmatrixError)}</p></div>` : ''}
+    ${d ? netMatrixHTML(d) : ''}`;
+  $('#nmRefresh').addEventListener('click', () => loadNetMatrix(true));
+  if (!d && !state.netmatrixBusy && !state.netmatrixError) setTimeout(() => { if (state.page === 'netmatrix' && !state.subview) loadNetMatrix(false); }, 0);
+}
+
+function loadProbes(force) {
+  if (state.probesBusy) return;
+  state.probesBusy = true;
+  state.probesError = '';
+  api('/api/probes').then(d => {
+    state.probes = d;
+  }).catch(e => {
+    state.probesError = e.message;
+    if (force) toast(e.message, 'error');
+  }).finally(() => {
+    state.probesBusy = false;
+    if (state.page === 'probes' && !state.subview) renderPage();
+  });
+}
+
+function probeSparkHTML(checks) {
+  const list = (checks || []).slice(-40);
+  if (!list.length) return '<span class="muted" style="font-size:11.5px">等待首次检查…</span>';
+  return list.map(c => `<i class="${c.ok ? 'ok' : 'bad'}" title="${esc(fmtTime(c.time))} · ${c.ok ? '正常' : esc(c.error || '异常')} · ${c.latency_ms}ms"></i>`).join('');
+}
+
+function probeCardHTML(t) {
+  const has = (t.checks || []).length > 0;
+  const cls = !has ? 'idle' : t.up ? 'up' : 'down';
+  const status = !has ? '待检测' : t.up ? '正常' : '异常';
+  const lat = t.latency_ms > 0 ? `${t.latency_ms} ms` : '—';
+  const uptime = has ? `${(Number(t.uptime) || 0).toFixed(1)}%` : '—';
+  return `<div class="card probe-card">
+    <div class="probe-head">
+      <span class="probe-dot ${cls}"></span>
+      <span class="probe-name">${esc(t.name)}</span>
+      <span class="probe-type">${esc(String(t.type || 'http').toUpperCase())}</span>
+      <span class="insp-pill tone-${cls === 'up' ? 'ok' : cls === 'down' ? 'bad' : 'off'}">${status}</span>
+    </div>
+    <div class="probe-url" title="${esc(t.url)}">${esc(t.url)}</div>
+    <div class="probe-meta"><span>24h 可用率 <b>${uptime}</b></span><span>最近延迟 <b>${lat}</b></span><span>间隔 <b>${t.interval}s</b></span></div>
+    <div class="probe-spark">${probeSparkHTML(t.checks)}</div>
+    <div class="probe-actions">
+      <button class="btn sm ghost" data-probe-check="${esc(t.id)}">立即检查</button>
+      <button class="btn sm danger" data-probe-del="${esc(t.id)}" data-probe-name="${esc(t.name)}">删除</button>
+    </div>
+  </div>`;
+}
+
+function renderProbes() {
+  const page = $('#page');
+  if (!page) return;
+  const d = state.probes;
+  const list = (d && d.targets) || [];
+  page.innerHTML = `
+    <section class="page-head">
+      <div><h1>网站拨测</h1><p class="page-sub">从面板所在机器监控 HTTP / TCP 可用性，公开状态页可直接分享给用户</p></div>
+      <div class="head-actions">
+        <a class="btn sm ghost" href="/status" target="_blank" rel="noopener">打开状态页</a>
+        <button class="btn sm ghost" id="probeRefresh">刷新</button>
+      </div>
+    </section>
+    <div class="card pr-form">
+      <div class="field"><label>名称</label><input id="prName" maxlength="40" placeholder="博客首页"></div>
+      <div class="field"><label>类型</label><select id="prType"><option value="http">HTTP</option><option value="tcp">TCP</option></select></div>
+      <div class="field"><label>地址</label><input id="prUrl" spellcheck="false" placeholder="https://example.com 或 1.2.3.4:443"></div>
+      <div class="field"><label>间隔（秒）</label><input id="prInterval" type="number" min="30" max="3600" value="60"></div>
+      <button class="btn primary" id="probeAdd">${ico('plus')}添加</button>
+    </div>
+    ${state.probesBusy && !d ? '<div class="card empty">正在读取拨测状态…</div>' : ''}
+    ${state.probesError && !d ? `<div class="card empty">${esc(state.probesError)}</div>` : ''}
+    <div class="pr-grid" id="probeList">${list.map(probeCardHTML).join('') || (d ? '<div class="card empty"><h3>还没有拨测目标</h3><p>添加一个网址或端口，开始记录可用率</p></div>' : '')}</div>
+    <p class="stock-note">拨测由面板本机发起，不消耗节点流量；24 小时可用率按检查次数计算，数据保留 7 天。</p>`;
+  $('#probeRefresh').addEventListener('click', () => loadProbes(true));
+  $('#probeAdd').addEventListener('click', async () => {
+    const name = $('#prName').value.trim();
+    const type = $('#prType').value;
+    const url = $('#prUrl').value.trim();
+    const interval = Number($('#prInterval').value) || 60;
+    if (!url) return toast('请填写监控地址', 'error');
+    const btn = $('#probeAdd');
+    btn.disabled = true;
+    try {
+      await api('/api/probes', { method: 'POST', body: JSON.stringify({ name, type, url, interval }) });
+      toast('已添加，正在执行首次检查', 'success');
+      state.probes = null;
+      loadProbes(true);
+    } catch (e) { toast(e.message, 'error'); btn.disabled = false; }
+  });
+  $('#probeList').addEventListener('click', async e => {
+    const check = e.target.closest('[data-probe-check]');
+    const del = e.target.closest('[data-probe-del]');
+    if (check) {
+      check.disabled = true;
+      check.textContent = '检查中…';
+      try {
+        await api('/api/probes/' + encodeURIComponent(check.dataset.probeCheck) + '/check', { method: 'POST', body: '{}' });
+        loadProbes(true);
+      } catch (err) { toast(err.message, 'error'); check.disabled = false; check.textContent = '立即检查'; }
+    } else if (del) {
+      const ok = await confirmDialog('删除拨测目标？', del.dataset.probeName + ' 的历史检查记录会一并删除。', '删除', true);
+      if (!ok) return;
+      try {
+        await api('/api/probes/' + encodeURIComponent(del.dataset.probeDel), { method: 'DELETE' });
+        toast('已删除', 'success');
+        loadProbes(true);
+      } catch (err) { toast(err.message, 'error'); }
+    }
+  });
+  if (!d && !state.probesBusy && !state.probesError) setTimeout(() => { if (state.page === 'probes' && !state.subview) loadProbes(false); }, 0);
+}
+
+function loadChanges(force) {
+  if (state.changesBusy) return;
+  state.changesBusy = true;
+  state.changesError = '';
+  api('/api/changes').then(d => {
+    state.changes = d;
+  }).catch(e => {
+    state.changesError = e.message;
+    if (force) toast(e.message, 'error');
+  }).finally(() => {
+    state.changesBusy = false;
+    if (state.page === 'changes' && !state.subview) renderPage();
+  });
+}
+
+function changeKindLabel(kind) {
+  return { stack: '应用', file: '文件' }[kind] || kind;
+}
+
+function changeSize(v) {
+  v = Number(v) || 0;
+  return v >= 1024 ? (v / 1024).toFixed(1) + ' KB' : v + ' B';
+}
+
+function changeRowHTML(c) {
+  const status = c.rolled_back ? '已回滚' : c.restorable ? '可回滚' : '无旧版本';
+  return `<tr>
+    <td><div>${timeAgo(c.time)}</div><div class="chg-sub">${fmtTime(c.time)}</div></td>
+    <td>${esc(c.node_name || '')}</td>
+    <td><span class="chg-kind ${c.kind === 'file' ? 'file' : ''}">${changeKindLabel(c.kind)}</span></td>
+    <td><div class="chg-target" title="${esc(c.target)}">${esc(c.target)}</div><div class="chg-sub">${esc(c.summary || '')}</div></td>
+    <td class="num">${changeSize(c.before_size)} → ${changeSize(c.after_size)}</td>
+    <td><span class="chg-status ${c.rolled_back || !c.restorable ? 'off' : 'ok'}">${status}</span></td>
+    <td class="num">
+      <button class="btn sm ghost" data-chg-view="${esc(c.id)}">查看</button>
+      ${c.restorable && !c.rolled_back ? `<button class="btn sm danger" data-chg-rollback="${esc(c.id)}" data-chg-target="${esc(c.target)}">回滚</button>` : ''}
+    </td>
+  </tr>`;
+}
+
+function renderChanges() {
+  const page = $('#page');
+  if (!page) return;
+  const d = state.changes;
+  const list = (d && d.changes) || [];
+  page.innerHTML = `
+    <section class="page-head">
+      <div><h1>变更记录</h1><p class="page-sub">保存应用与文件的修改前后内容，改坏了可以一键回滚</p></div>
+      <div class="head-actions"><button class="btn sm ghost" id="chgRefresh">刷新</button></div>
+    </section>
+    ${state.changesBusy && !d ? '<div class="card empty">正在读取变更记录…</div>' : ''}
+    ${state.changesError && !d ? `<div class="card empty">${esc(state.changesError)}</div>` : ''}
+    ${d ? `<div class="card table-wrap">
+      <table class="table" id="chgTable">
+        <thead><tr><th>时间</th><th>节点</th><th>类型</th><th>目标</th><th class="num">大小</th><th>状态</th><th></th></tr></thead>
+        <tbody>${list.map(changeRowHTML).join('') || '<tr><td colspan="7"><div class="batch-empty">还没有记录。通过面板保存应用或编辑文件后，这里会出现可回滚的版本。</div></td></tr>'}</tbody>
+      </table>
+    </div>
+    <p class="stock-note">每个目标保留最近一次修改前的版本，最多保存 80 条记录；回滚同样通过 SFTP 原子写入。</p>` : ''}`;
+  $('#chgRefresh').addEventListener('click', () => loadChanges(true));
+  if (d) {
+    $('#chgTable').addEventListener('click', e => {
+      const view = e.target.closest('[data-chg-view]');
+      const roll = e.target.closest('[data-chg-rollback]');
+      if (view) openChangeDiff(view.dataset.chgView);
+      else if (roll) rollbackChange(roll.dataset.chgRollback, roll.dataset.chgTarget);
+    });
+  } else if (!state.changesBusy && !state.changesError) {
+    setTimeout(() => { if (state.page === 'changes' && !state.subview) loadChanges(false); }, 0);
+  }
+}
+
+function diffHTML(before, after) {
+  const cap = s => {
+    s = String(s || '');
+    return s.length > 8000 ? s.slice(0, 8000) + '\n… (已截断)' : s;
+  };
+  const a = cap(before).split('\n');
+  const b = cap(after).split('\n');
+  let p = 0;
+  while (p < a.length && p < b.length && a[p] === b[p]) p++;
+  let s = 0;
+  while (s < a.length - p && s < b.length - p && a[a.length - 1 - s] === b[b.length - 1 - s]) s++;
+  const lines = (arr, from, to, cls) => arr.slice(from, to).map(l => `<span class="line ${cls}">${esc(l) || ' '}</span>`).join('');
+  const col = (title, arr, midCls, midFrom, midTo) => `<div class="chg-col"><h4>${title}</h4><pre>${lines(arr, 0, midFrom, '')}${lines(arr, midFrom, midTo, midCls)}${lines(arr, midTo, arr.length, '')}</pre></div>`;
+  return `<div class="chg-diff">${col('修改前', a, 'del', p, a.length - s)}${col('修改后', b, 'add', p, b.length - s)}</div>`;
+}
+
+async function openChangeDiff(id) {
+  try {
+    const d = await api('/api/changes/' + encodeURIComponent(id));
+    const it = d.item || {};
+    const root = $('#modal-root');
+    root.innerHTML = `<div class="modal-mask"><div class="modal modal-wide" role="dialog" aria-modal="true">
+      <h3 class="modal-title">变更详情 · ${esc(it.summary || it.target || '')}</h3>
+      <p class="modal-desc">${esc(it.node_name || '')} · ${fmtTime(it.time)} · ${esc(it.target || '')}</p>
+      ${diffHTML(d.before || '', d.after || '')}
+      <div class="modal-actions"><button class="btn ghost" data-x="close">关闭</button></div>
+    </div></div>`;
+    root.querySelector('[data-x=close]').onclick = closeModal;
+    root.querySelector('.modal-mask').onclick = ev => { if (ev.target.classList.contains('modal-mask')) closeModal(); };
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function rollbackChange(id, target) {
+  const ok = await confirmDialog('回滚这次变更？', `将把 ${target} 恢复为修改前的内容。`, '回滚', true);
+  if (!ok) return;
+  try {
+    await api('/api/changes/' + encodeURIComponent(id) + '/rollback', { method: 'POST', body: '{}' });
+    toast('已回滚', 'success');
+    loadChanges(true);
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+function loadDrift(force) {
+  if (state.driftBusy) return;
+  state.driftBusy = true;
+  state.driftError = '';
+  if (state.page === 'drift' && !state.subview) renderPage();
+  api('/api/drift').then(d => {
+    state.drift = d;
+  }).catch(e => {
+    state.driftError = e.message;
+    if (force) toast(e.message, 'error');
+  }).finally(() => {
+    state.driftBusy = false;
+    if (state.page === 'drift' && !state.subview) renderPage();
+  });
+}
+
+function driftHashLabel(h) {
+  if (h === 'unknown') return '读取失败';
+  if (h === 'missing') return '未安装';
+  return String(h).slice(0, 10);
+}
+
+function driftItemHTML(it, names) {
+  const rows = it.groups.map((g, i) => {
+    const nodeNames = g.nodes.map(id => names[id] || id).join('、');
+    return `<div class="drift-group ${i === 0 ? 'major' : 'minor'}">
+      <span class="drift-hash mono">${esc(driftHashLabel(g.hash))}</span>
+      <span class="drift-nodes">${esc(nodeNames)}</span>
+      <span class="drift-count">${g.nodes.length} 台</span>
+    </div>`;
+  }).join('');
+  return `<div class="card drift-item">
+    <div class="drift-head">
+      <div class="drift-title"><b>${esc(it.label)}</b><span class="mono drift-key">${esc(String(it.key).replace(/^file:/, ''))}</span></div>
+      <span class="drift-pill ${it.drifted.length ? 'bad' : 'ok'}">${it.drifted.length ? it.drifted.length + ' 台不一致' : '一致'}</span>
+    </div>
+    ${rows}
+  </div>`;
+}
+
+function renderDrift() {
+  const page = $('#page');
+  if (!page) return;
+  const d = state.drift;
+  const names = {};
+  ((d && d.nodes) || []).forEach(n => { names[n.id] = n.name; });
+  const driftNodes = new Set();
+  ((d && d.items) || []).forEach(it => (it.drifted || []).forEach(id => driftNodes.add(id)));
+  const offNodes = ((d && d.nodes) || []).filter(n => !n.online).map(n => n.name).join('、');
+  page.innerHTML = `
+    <section class="page-head">
+      <div><h1>配置漂移检测</h1><p class="page-sub">对比各节点关键配置的哈希，找出与多数节点不一致的机器</p></div>
+      <div class="head-actions"><button class="btn sm ghost" id="driftRefresh">重新扫描</button></div>
+    </section>
+    ${state.driftBusy && !d ? '<div class="card empty">正在扫描各节点配置…</div>' : ''}
+    ${state.driftError && !d ? `<div class="card empty">${esc(state.driftError)}</div>` : ''}
+    ${d ? `
+    <div class="card drift-hero">
+      <div class="drift-sum"><b>${d.scanned}</b><span>在线节点</span></div>
+      <div class="drift-sum"><b>${(d.items || []).length}</b><span>检查项</span></div>
+      <div class="drift-sum ${d.drifts ? 'bad' : 'ok'}"><b>${d.drifts}</b><span>存在漂移</span></div>
+      <div class="drift-sum ${driftNodes.size ? 'warn' : ''}"><b>${driftNodes.size}</b><span>漂移节点</span></div>
+      <div class="drift-time">扫描于 ${fmtTime(d.time)}</div>
+    </div>
+    ${(d.items || []).length ? `<div class="drift-grid">${(d.items || []).map(it => driftItemHTML(it, names)).join('')}</div>` : '<div class="card empty">没有可扫描的在线节点</div>'}
+    <p class="stock-note">按多数节点作为基准分组，SSH / Nginx / Docker / crontab / Compose 配置均以 SHA-256 对比，只读取哈希不上传原文。${offNodes ? ' 未参与扫描：' + esc(offNodes) + '（离线或仅 SFTP）。' : ''}</p>` : ''}`;
+  $('#driftRefresh').addEventListener('click', () => loadDrift(true));
+  if (!d && !state.driftBusy && !state.driftError) {
+    setTimeout(() => { if (state.page === 'drift' && !state.subview) loadDrift(false); }, 0);
+  }
+}
+
+function batchSelectedIds() {
+  return Object.keys(state.batchSel).filter(id => state.batchSel[id]);
+}
+
+function batchTabsHTML() {
+  const tabs = [['exec', '执行命令'], ['update', '批量更新应用'], ['upload', '分发文件']];
+  return `<div class="park-tabs" id="batchTabs">${tabs.map(([k, l]) => `<button data-batch-tab="${k}" class="${state.batchTab === k ? 'active' : ''}">${l}</button>`).join('')}</div>`;
+}
+
+function batchBodyHTML() {
+  if (state.batchTab === 'update') {
+    return `<div class="batch-head"><div><h2 class="batch-title">批量更新 Compose 应用</h2><p class="batch-desc">对所选节点的应用目录逐个执行 pull + up -d --remove-orphans，可能持续几分钟。</p></div><button class="btn primary" id="batchUpdateBtn">更新应用</button></div>`;
+  }
+  if (state.batchTab === 'upload') {
+    return `<div class="batch-head"><div><h2 class="batch-title">分发文件</h2><p class="batch-desc">把本地文件写入每台节点文件根目录下的指定路径，单文件最大 20MB。</p></div><button class="btn primary" id="batchUploadBtn">上传</button></div>
+    <div class="batch-row">
+      <div class="field"><label>目标目录（绝对路径）</label><input id="batchPath" value="/" spellcheck="false"></div>
+      <div class="field"><label>选择文件</label><input type="file" id="batchFile"></div>
+    </div>`;
+  }
+  return `<div class="batch-head"><div><h2 class="batch-title">执行 Shell 命令</h2><p class="batch-desc">命令通过 SSH 在每台节点以登录用户执行，需要 POSIX sh 兼容；只读查询与运维脚本都合适。</p></div><button class="btn primary" id="batchRun">${ico('play')}开始执行</button></div>
+  <textarea class="batch-cmd" id="batchCmd" spellcheck="false" placeholder="例如：df -h /&#10;或：systemctl status docker --no-pager"></textarea>`;
+}
+
+function batchResultCard(r, kind) {
+  const ms = r.elapsed_ms != null ? `${r.elapsed_ms} ms` : '';
+  const head = `<div class="batch-res-head"><span class="dot ${r.ok ? 'ok' : ''}"></span>${esc(r.name)}<em>${ms}</em></div>`;
+  const err = r.error ? `<div class="batch-app"><span class="st"></span><span class="err">${esc(r.error)}</span></div>` : '';
+  if (kind === 'update') {
+    const apps = (r.apps || []).map(a => `<div class="batch-app"><span class="st ${a.ok ? 'ok' : ''}"></span><b>${esc(a.name)}</b><span class="err">${a.ok ? '更新成功' : '失败'}</span></div>`).join('');
+    return `<div class="batch-res-card">${head}${err}${apps ? `<div class="batch-apps">${apps}</div>` : ''}</div>`;
+  }
+  if (kind === 'upload') {
+    return `<div class="batch-res-card">${head}${r.error ? err : '<div class="batch-app"><span class="st ok"></span><span class="err">写入成功</span></div>'}</div>`;
+  }
+  const out = r.output ? `<pre>${esc(r.output)}</pre>` : '';
+  return `<div class="batch-res-card">${head}${err}${out}</div>`;
+}
+
+function drawBatchResults() {
+  const box = $('#batchResults');
+  if (!box) return;
+  const br = state.batchResults;
+  if (!br || br.kind !== state.batchTab) { box.innerHTML = ''; return; }
+  if (!br.results.length) { box.innerHTML = '<div class="batch-empty">没有结果</div>'; return; }
+  box.innerHTML = br.results.map(r => batchResultCard(r, br.kind)).join('');
+}
+
+function setBatchBusy(busy, msg) {
+  state.batchBusy = busy;
+  ['batchRun', 'batchUpdateBtn', 'batchUploadBtn'].forEach(id => {
+    const b = $('#' + id);
+    if (b) b.disabled = busy;
+  });
+  const box = $('#batchResults');
+  if (box && busy) box.innerHTML = `<div class="batch-empty">${esc(msg || '处理中…')}</div>`;
+}
+
+async function runBatchExec() {
+  const ids = batchSelectedIds();
+  const el = $('#batchCmd');
+  const cmd = el ? el.value.trim() : '';
+  if (!ids.length) return toast('请先选择节点', 'error');
+  if (!cmd) return toast('请填写要执行的命令', 'error');
+  setBatchBusy(true, `正在 ${ids.length} 台节点执行命令…`);
+  try {
+    const d = await api('/api/batch/exec', { method: 'POST', body: JSON.stringify({ ids, cmd }) });
+    state.batchResults = { kind: 'exec', results: d.results || [] };
+  } catch (e) { toast(e.message, 'error'); state.batchResults = null; }
+  setBatchBusy(false);
+  drawBatchResults();
+}
+
+async function runBatchUpdate() {
+  const ids = batchSelectedIds();
+  if (!ids.length) return toast('请先选择节点', 'error');
+  setBatchBusy(true, `正在更新 ${ids.length} 台节点的应用，可能需要几分钟…`);
+  try {
+    const d = await api('/api/batch/update', { method: 'POST', body: JSON.stringify({ ids }) });
+    state.batchResults = { kind: 'update', results: d.results || [] };
+  } catch (e) { toast(e.message, 'error'); state.batchResults = null; }
+  setBatchBusy(false);
+  drawBatchResults();
+}
+
+async function runBatchUpload() {
+  const ids = batchSelectedIds();
+  const dirEl = $('#batchPath');
+  const input = $('#batchFile');
+  const dir = dirEl ? dirEl.value.trim() : '';
+  const file = input && input.files && input.files[0];
+  if (!ids.length) return toast('请先选择节点', 'error');
+  if (!dir.startsWith('/')) return toast('目标目录需为绝对路径', 'error');
+  if (!file) return toast('请选择要分发的文件', 'error');
+  setBatchBusy(true, `正在把 ${file.name} 分发到 ${ids.length} 台节点…`);
+  try {
+    const url = '/api/batch/upload?ids=' + encodeURIComponent(ids.join(',')) + '&path=' + encodeURIComponent(dir) + '&name=' + encodeURIComponent(file.name);
+    const res = await fetch(url, { method: 'POST', credentials: 'same-origin', headers: { 'X-KayPanel': '1' }, body: file });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || '上传失败');
+    state.batchResults = { kind: 'upload', results: data.results || [] };
+    toast(`已写入 ${data.ok}/${data.total} 台节点`, 'success');
+    if (input) input.value = '';
+  } catch (e) { toast(e.message, 'error'); state.batchResults = null; }
+  setBatchBusy(false);
+  drawBatchResults();
+}
+
+function renderBatch() {
+  const page = $('#page');
+  if (!page) return;
+  const nodes = state.nodes;
+  const sel = batchSelectedIds();
+  page.innerHTML = `
+    <section class="page-head">
+      <div><h1>多机批量操作</h1><p class="page-sub">选中的节点并发执行，最多 20 台；适合群发命令、统一更新与分发文件</p></div>
+      <div class="head-actions"><span class="park-counter">${ico('batch')}<span id="batchCount">${sel.length}</span> 台已选</span></div>
+    </section>
+    <div class="card batch-pick" id="batchPicker">
+      ${nodes.map(n => `<button class="batch-node ${state.batchSel[n.id] ? 'on' : ''}" data-batch-node="${esc(n.id)}"><span class="dot ${n.online ? 'online' : ''}"></span>${esc(n.name)}</button>`).join('') || '<span class="muted">尚未添加节点</span>'}
+      <div class="batch-pick-tools">
+        <button class="btn sm ghost" id="batchAll">全选</button>
+        <button class="btn sm ghost" id="batchNone">清空</button>
+      </div>
+    </div>
+    ${batchTabsHTML()}
+    <div class="card batch-body" id="batchBody">${batchBodyHTML()}</div>
+    <div class="batch-res" id="batchResults"></div>`;
+  $('#batchPicker').addEventListener('click', e => {
+    const btn = e.target.closest('[data-batch-node]');
+    if (!btn) return;
+    const id = btn.dataset.batchNode;
+    state.batchSel[id] = !state.batchSel[id];
+    btn.classList.toggle('on', !!state.batchSel[id]);
+    const c = $('#batchCount');
+    if (c) c.textContent = String(batchSelectedIds().length);
+  });
+  $('#batchAll').addEventListener('click', () => {
+    nodes.forEach(n => { state.batchSel[n.id] = true; });
+    $$('[data-batch-node]', page).forEach(b => b.classList.add('on'));
+    const c = $('#batchCount');
+    if (c) c.textContent = String(batchSelectedIds().length);
+  });
+  $('#batchNone').addEventListener('click', () => {
+    state.batchSel = {};
+    $$('[data-batch-node]', page).forEach(b => b.classList.remove('on'));
+    const c = $('#batchCount');
+    if (c) c.textContent = '0';
+  });
+  $('#batchTabs').addEventListener('click', e => {
+    const btn = e.target.closest('[data-batch-tab]');
+    if (!btn || btn.dataset.batchTab === state.batchTab) return;
+    state.batchTab = btn.dataset.batchTab;
+    renderPage();
+  });
+  if ($('#batchRun')) $('#batchRun').addEventListener('click', runBatchExec);
+  if ($('#batchUpdateBtn')) $('#batchUpdateBtn').addEventListener('click', runBatchUpdate);
+  if ($('#batchUploadBtn')) $('#batchUploadBtn').addEventListener('click', runBatchUpload);
+  if (state.batchBusy) setBatchBusy(true, '处理中…');
+  else drawBatchResults();
 }
 
 /* ---------- modal ---------- */

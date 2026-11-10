@@ -27,11 +27,12 @@ type Node struct {
 	StacksDir    string `yaml:"stacks_dir" json:"stacks_dir"`
 	HostKey      string `yaml:"host_key,omitempty" json:"host_key"`
 	SkipHostKey  bool   `yaml:"skip_host_key,omitempty" json:"skip_host_key"`
-	SFTPOnly     bool   `yaml:"sftp_only,omitempty" json:"sftp_only"`
-	AutoWake     bool   `yaml:"auto_wake,omitempty" json:"auto_wake"`
-	IBAPIKey     string `yaml:"instabox_api_key,omitempty" json:"-"`
-	IBMachineID  string `yaml:"instabox_machine_id,omitempty" json:"instabox_machine_id"`
-	CreatedAt    string `yaml:"created_at,omitempty" json:"created_at"`
+	SFTPOnly     bool    `yaml:"sftp_only,omitempty" json:"sftp_only"`
+	AutoWake     bool    `yaml:"auto_wake,omitempty" json:"auto_wake"`
+	IBAPIKey     string  `yaml:"instabox_api_key,omitempty" json:"-"`
+	IBMachineID  string  `yaml:"instabox_machine_id,omitempty" json:"instabox_machine_id"`
+	PowerWatts   float64 `yaml:"power_watts,omitempty" json:"power_watts"`
+	CreatedAt    string  `yaml:"created_at,omitempty" json:"created_at"`
 }
 
 type Settings struct {
@@ -46,6 +47,8 @@ type Settings struct {
 	AIBase  string `yaml:"ai_base,omitempty" json:"ai_base"`
 	AIModel string `yaml:"ai_model,omitempty" json:"ai_model"`
 	AIKey   string `yaml:"ai_key,omitempty" json:"-"`
+
+	CostPerKWh float64 `yaml:"cost_per_kwh,omitempty" json:"cost_per_kwh"`
 }
 
 type Config struct {
@@ -84,7 +87,7 @@ func Open(path string) (*Store, string, error) {
 			Listen:        ":8080",
 			PasswordHash:  string(hash),
 			SessionSecret: RandomHex(32),
-			Settings:      Settings{CPUAlert: 90, MemAlert: 90, DiskAlert: 90},
+			Settings:      Settings{CPUAlert: 90, MemAlert: 90, DiskAlert: 90, CostPerKWh: 0.6},
 		}
 		if err := s.saveLocked(); err != nil {
 			return nil, "", err
@@ -117,6 +120,10 @@ func Open(path string) (*Store, string, error) {
 	}
 	if s.cfg.Settings.DailyHour == 0 && !s.cfg.Settings.DailyReport {
 		s.cfg.Settings.DailyHour = 8
+		changed = true
+	}
+	if s.cfg.Settings.CostPerKWh <= 0 {
+		s.cfg.Settings.CostPerKWh = 0.6
 		changed = true
 	}
 	if changed {
@@ -171,6 +178,13 @@ func (s *Store) SetSettings(v Settings) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.cfg.Settings = v
+	return s.saveLocked()
+}
+
+func (s *Store) SetCostPerKWh(v float64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.cfg.Settings.CostPerKWh = v
 	return s.saveLocked()
 }
 
