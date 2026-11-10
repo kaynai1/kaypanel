@@ -259,8 +259,8 @@ func (s *Server) handleDrillEval(w http.ResponseWriter, r *http.Request) {
 		}, 700)
 		if err != nil {
 			aiErr = err.Error()
-		} else if strings.TrimSpace(reply) != "" {
-			feedback = clipText(strings.TrimSpace(reply), 900)
+		} else if txt := strings.TrimSpace(reply); len([]rune(txt)) >= 40 {
+			feedback = clipText(txt, 900)
 			usedAI = true
 		}
 	}

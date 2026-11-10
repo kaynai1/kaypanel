@@ -381,16 +381,29 @@ func (s *Server) handleRootCauseAI(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 75*time.Second)
 	defer cancel()
-	reply, err := ai.ChatTokens(ctx, set.AIBase, set.AIKey, set.AIModel, []ai.Message{
+	msgs := []ai.Message{
 		{Role: "system", Content: "你是资深 SRE，负责做跨节点根因分析。只依据给出的信号与关联结果作答，不要编造系统状态。用中文输出 250-400 字：先给最可能的根因假设（按可能性排序），再说明判断依据，最后给出 2-3 条只读的排查命令或动作。不要输出代码块。"},
 		{Role: "user", Content: rcReportText(rep)},
-	}, 1200)
+	}
+	reply, err := ai.ChatTokens(ctx, set.AIBase, set.AIKey, set.AIModel, msgs, 1200)
 	if err != nil {
 		writeErr(w, http.StatusBadGateway, err.Error())
 		return
 	}
+	text := strings.TrimSpace(reply)
+	if len([]rune(text)) < 60 {
+		if second, err2 := ai.ChatTokens(ctx, set.AIBase, set.AIKey, set.AIModel, msgs, 2000); err2 == nil {
+			if t2 := strings.TrimSpace(second); len([]rune(t2)) > len([]rune(text)) {
+				text = t2
+			}
+		}
+	}
+	if len([]rune(text)) < 60 {
+		writeErr(w, http.StatusBadGateway, "AI 返回内容过短，请稍后重试")
+		return
+	}
 	s.audit.Add("admin", "", "根因分析.AI", fmt.Sprintf("%d 小时", hours))
-	writeJSON(w, http.StatusOK, map[string]any{"text": strings.TrimSpace(reply), "ai": true})
+	writeJSON(w, http.StatusOK, map[string]any{"text": text, "ai": true})
 }
 
 func rcReportText(rep rcReport) string {

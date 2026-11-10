@@ -309,8 +309,8 @@ func (s *Server) handleBroadcastGenerate(w http.ResponseWriter, r *http.Request)
 		}, 1000)
 		if err != nil {
 			aiErr = err.Error()
-		} else if strings.TrimSpace(reply) != "" {
-			text = clipText(strings.TrimSpace(reply), 2600)
+		} else if txt := strings.TrimSpace(reply); len([]rune(txt)) >= 60 {
+			text = clipText(txt, 2600)
 			usedAI = true
 		}
 	}
