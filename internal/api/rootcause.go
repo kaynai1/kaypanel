@@ -165,11 +165,16 @@ func (s *Server) buildRootCause(hours int) rcReport {
 
 	var groups [][]rcSignal
 	for _, sig := range signals {
-		if len(groups) == 0 || sig.Time-groups[len(groups)-1][len(groups)-1].Time > 20*60 {
+		if len(groups) == 0 {
 			groups = append(groups, []rcSignal{sig})
 			continue
 		}
-		groups[len(groups)-1] = append(groups[len(groups)-1], sig)
+		last := groups[len(groups)-1]
+		if sig.Time-last[len(last)-1].Time > 20*60 {
+			groups = append(groups, []rcSignal{sig})
+			continue
+		}
+		groups[len(groups)-1] = append(last, sig)
 	}
 	for _, group := range groups {
 		nodeSet := map[string]bool{}
