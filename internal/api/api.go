@@ -19,6 +19,7 @@ import (
 	"kaypanel/internal/audit"
 	"kaypanel/internal/changes"
 	"kaypanel/internal/config"
+	"kaypanel/internal/insight"
 	"kaypanel/internal/instabox"
 	"kaypanel/internal/metrics"
 	"kaypanel/internal/node"
@@ -37,11 +38,12 @@ type Server struct {
 	limiter  *loginLimiter
 	probes   *probe.Manager
 	changes  *changes.Manager
+	insights *insight.Store
 
 	desktopToken string
 }
 
-func New(store *config.Store, mgr *node.Manager, auditLog *audit.Log, web http.FileSystem, version string, probes *probe.Manager, changeLog *changes.Manager) *Server {
+func New(store *config.Store, mgr *node.Manager, auditLog *audit.Log, web http.FileSystem, version string, probes *probe.Manager, changeLog *changes.Manager, insights *insight.Store) *Server {
 	return &Server{
 		store:    store,
 		mgr:      mgr,
@@ -52,6 +54,7 @@ func New(store *config.Store, mgr *node.Manager, auditLog *audit.Log, web http.F
 		limiter:  newLoginLimiter(),
 		probes:   probes,
 		changes:  changeLog,
+		insights: insights,
 	}
 }
 
@@ -101,6 +104,14 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/batch/exec", s.auth(s.handleBatchExec))
 	mux.Handle("POST /api/batch/update", s.auth(s.handleBatchUpdate))
 	mux.Handle("POST /api/batch/upload", s.auth(s.handleBatchUpload))
+
+	mux.Handle("GET /api/broadcast", s.auth(s.handleBroadcastList))
+	mux.Handle("POST /api/broadcast", s.auth(s.handleBroadcastGenerate))
+	mux.Handle("GET /api/drill", s.auth(s.handleDrillList))
+	mux.Handle("POST /api/drill/eval", s.auth(s.handleDrillEval))
+	mux.Handle("GET /api/rootcause", s.auth(s.handleRootCause))
+	mux.Handle("POST /api/rootcause/ai", s.auth(s.handleRootCauseAI))
+	mux.Handle("POST /api/query", s.auth(s.handleQuery))
 
 	mux.HandleFunc("GET /api/status", s.handlePublicStatusAPI)
 	mux.HandleFunc("GET /status", s.handlePublicStatusPage)

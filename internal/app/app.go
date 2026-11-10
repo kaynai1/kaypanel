@@ -16,6 +16,7 @@ import (
 	"kaypanel/internal/audit"
 	"kaypanel/internal/changes"
 	"kaypanel/internal/config"
+	"kaypanel/internal/insight"
 	"kaypanel/internal/node"
 	"kaypanel/internal/probe"
 )
@@ -60,7 +61,8 @@ func Start(opts Options) (*Instance, error) {
 	probeCtx, probeCancel := context.WithCancel(context.Background())
 	probeMgr.Start(probeCtx)
 	changeLog := changes.New(store.Dir())
-	srv := api.New(store, mgr, auditLog, http.FS(opts.Web), opts.Version, probeMgr, changeLog)
+	insightStore := insight.New(store.Dir())
+	srv := api.New(store, mgr, auditLog, http.FS(opts.Web), opts.Version, probeMgr, changeLog, insightStore)
 	inst := &Instance{Store: store, Manager: mgr, InitialPassword: initialPassword, alertCancel: alertCancel, probeCancel: probeCancel}
 	if opts.Desktop {
 		inst.DesktopToken = config.RandomHex(24)

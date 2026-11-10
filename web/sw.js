@@ -1,5 +1,5 @@
-const CACHE = 'kaypanel-v13';
-const SHELL = ['/', '/assets/style.css?v=111', '/assets/app.js?v=111', '/assets/logo.svg', '/assets/vendor/xterm.css', '/manifest.webmanifest'];
+const CACHE = 'kaypanel-v14';
+const SHELL = ['/', '/assets/style.css?v=112', '/assets/app.js?v=112', '/assets/logo.svg', '/assets/vendor/xterm.css', '/manifest.webmanifest'];
 
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL)).then(() => self.skipWaiting()).catch(() => self.skipWaiting()));

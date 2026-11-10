@@ -1,6 +1,6 @@
 'use strict';
 
-const TOP_PAGES = ['overview', 'topology', 'netmatrix', 'security', 'personality', 'timeline', 'probes', 'batch', 'changes', 'drift', 'stocks', 'park', 'containers', 'apps', 'files', 'terminal', 'ai', 'cost', 'settings'];
+const TOP_PAGES = ['overview', 'topology', 'netmatrix', 'security', 'broadcast', 'rootcause', 'ask', 'drill', 'personality', 'timeline', 'probes', 'batch', 'changes', 'drift', 'stocks', 'park', 'containers', 'apps', 'files', 'terminal', 'ai', 'cost', 'settings'];
 const $ = (sel, el = document) => el.querySelector(sel);
 const $$ = (sel, el = document) => Array.from(el.querySelectorAll(sel));
 
@@ -97,6 +97,28 @@ const state = {
   batchSel: {},
   batchResults: null,
   batchBusy: false,
+  broadcast: null,
+  broadcastBusy: false,
+  broadcastError: '',
+  broadcastGen: '',
+  rc: null,
+  rcBusy: false,
+  rcError: '',
+  rcHours: 24,
+  rcAI: '',
+  rcAIBusy: false,
+  askQ: '',
+  askResult: null,
+  askBusy: false,
+  askError: '',
+  drill: null,
+  drillBusy: false,
+  drillError: '',
+  drillPick: '',
+  drillSel: {},
+  drillNote: '',
+  drillResult: null,
+  drillEvalBusy: false,
 };
 
 function prefOn(key) {
@@ -154,6 +176,10 @@ const ICON_PATHS = {
   batch: '<rect x="3" y="3" width="7.5" height="7.5" rx="1.6"/><rect x="13.5" y="3" width="7.5" height="7.5" rx="1.6"/><rect x="3" y="13.5" width="7.5" height="7.5" rx="1.6"/><rect x="13.5" y="13.5" width="7.5" height="7.5" rx="1.6"/>',
   coin: '<ellipse cx="12" cy="6.2" rx="7" ry="3"/><path d="M5 6.2v5.2c0 1.7 3.1 3 7 3s7-1.3 7-3V6.2"/><path d="M5 11.4v5.2c0 1.7 3.1 3 7 3s7-1.3 7-3v-5.2"/>',
   diff: '<circle cx="6.5" cy="6" r="2.2"/><circle cx="17.5" cy="6" r="2.2"/><circle cx="12" cy="18" r="2.2"/><path d="M8.7 6h6.6M7.6 8l3.4 7.8M16.4 8l-3.4 7.8"/>',
+  broadcast: '<path d="M3.5 10v4a1.5 1.5 0 0 0 1.5 1.5h1.8L12 20V4L6.8 8.5H5A1.5 1.5 0 0 0 3.5 10Z"/><path d="M16 8.5a4 4 0 0 1 0 7"/><path d="M18.5 6a7.5 7.5 0 0 1 0 12"/>',
+  rootcause: '<circle cx="10.5" cy="10.5" r="6.5"/><path d="m15.5 15.5 5 5"/><circle cx="8.2" cy="10.5" r="1.1"/><circle cx="12.8" cy="8" r="1.1"/><circle cx="12.8" cy="13" r="1.1"/><path d="m9.2 10.2 2.6-1.5M9.3 10.9l2.4 1.5"/>',
+  ask: '<path d="M21 11.5a8 8 0 0 1-8 8H9l-4 2 1.2-4.2A8 8 0 1 1 21 11.5Z"/><path d="M8.5 11.5h.01M12 11.5h.01M15.5 11.5h.01"/>',
+  drill: '<circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="4.5"/><circle cx="12" cy="12" r="1"/><path d="M12 3.5V6M12 18v2.5M3.5 12H6M18 12h2.5"/>',
 };
 
 function ico(name, cls = '') {
@@ -404,6 +430,11 @@ function renderShell() {
         <button class="nav-item" data-page="timeline">${ico('clock')}<span>故障回放</span></button>
         <button class="nav-item" data-page="containers">${ico('container')}<span>容器</span><span class="nav-badge hidden" id="navCtrBadge"></span></button>
         <button class="nav-item" data-page="apps">${ico('app')}<span>应用</span></button>
+        <div class="nav-group">洞察</div>
+        <button class="nav-item" data-page="broadcast">${ico('broadcast')}<span>AI 播报</span></button>
+        <button class="nav-item" data-page="rootcause">${ico('rootcause')}<span>根因分析</span></button>
+        <button class="nav-item" data-page="ask">${ico('ask')}<span>指标问答</span></button>
+        <button class="nav-item" data-page="drill">${ico('drill')}<span>故障演练</span></button>
         <div class="nav-group">工具</div>
         <button class="nav-item" data-page="probes">${ico('probe')}<span>拨测状态</span></button>
         <button class="nav-item" data-page="batch">${ico('batch')}<span>批量操作</span></button>
@@ -537,6 +568,13 @@ function refreshCurrentPage() {
     case 'changes': loadChanges(true); break;
     case 'drift': loadDrift(true); break;
     case 'cost': loadCost(true); break;
+    case 'broadcast': loadBroadcast(true); break;
+    case 'rootcause': loadRootCause(true); break;
+    case 'ask':
+      if (state.askResult) askSubmit(state.askResult.query);
+      else renderPage();
+      break;
+    case 'drill': loadDrill(true); break;
     case 'batch': renderPage(); break;
     case 'personality': loadPersonality(true); break;
     case 'timeline': loadTimeline(true); break;
@@ -711,6 +749,10 @@ function renderPage() {
     case 'probes': return renderProbes();
     case 'changes': return renderChanges();
     case 'drift': return renderDrift();
+    case 'broadcast': return renderBroadcast();
+    case 'rootcause': return renderRootCause();
+    case 'ask': return renderAsk();
+    case 'drill': return renderDrill();
     case 'batch': return renderBatch();
     case 'cost': return renderCost();
     case 'personality': return renderPersonality();
@@ -4020,6 +4062,10 @@ const PALETTE_PAGES = [
   ['topology', '机房拓扑', '可视化机房连接', 'topology'],
   ['netmatrix', '网络质量', '节点间延迟与丢包矩阵', 'network'],
   ['security', '安全体检', 'SSH / 防火墙 / 证书检查', 'shield'],
+  ['broadcast', 'AI 播报', '实时水位写成一段运维播报', 'broadcast'],
+  ['rootcause', '根因分析', '跨节点异常关联与怀疑排序', 'rootcause'],
+  ['ask', '指标问答', '用自然语言查历史指标', 'ask'],
+  ['drill', '故障演练', 'SRE 故障场景模拟考核', 'drill'],
   ['probes', '拨测状态', '网站与端口可用性 + 公开状态页', 'probe'],
   ['changes', '变更记录', '文件与应用修改回滚', 'history'],
   ['drift', '配置漂移', '对比节点关键配置差异', 'diff'],
@@ -6594,6 +6640,533 @@ function promptDialog(title, desc, value) {
     input.addEventListener('keydown', ev => { if (ev.key === 'Enter') { ev.preventDefault(); submit(); } });
     input.focus();
     input.select();
+  });
+}
+
+/* ---------- insight: AI broadcast ---------- */
+
+function loadBroadcast(force) {
+  if (state.broadcastBusy) return;
+  state.broadcastBusy = true;
+  state.broadcastError = '';
+  api('/api/broadcast').then(d => {
+    state.broadcast = d;
+  }).catch(e => {
+    state.broadcastError = e.message;
+    if (force) toast(e.message, 'error');
+  }).finally(() => {
+    state.broadcastBusy = false;
+    if (state.page === 'broadcast' && !state.subview) renderPage();
+  });
+}
+
+function broadcastTextHTML(text) {
+  return String(text || '').split('\n').map(p => p.trim()).filter(Boolean).map(p => `<p>${esc(p)}</p>`).join('');
+}
+
+function broadcastCardHTML(b) {
+  if (!b) return '';
+  const isAlert = b.tone === 'alert';
+  const chips = (b.highlights || []).map(h => `<span class="bc-chip">${esc(h)}</span>`).join('');
+  return `<div class="card bc-hero">
+    <div class="bc-head">
+      <span class="bc-tone ${isAlert ? 'bad' : 'ok'}">${isAlert ? '异常简报' : '日常播报'}</span>
+      <span class="bc-ai">${b.ai ? 'AI 生成' : '本地生成'}</span>
+      <span class="bc-time">${esc(fmtTime(b.time))} · ${esc(timeAgo(b.time))}</span>
+    </div>
+    <div class="bc-body">${broadcastTextHTML(b.text)}</div>
+    ${chips ? `<div class="bc-chips">${chips}</div>` : ''}
+  </div>`;
+}
+
+function renderBroadcast() {
+  const page = $('#page');
+  if (!page) return;
+  const d = state.broadcast;
+  const latest = d && d.latest;
+  const hist = (d && d.history) || [];
+  const busy = state.broadcastGen;
+  page.innerHTML = `
+    <section class="page-head">
+      <div><h1>AI 运维播报</h1><p class="page-sub">把实时水位、告警与事件写成一段人话播报，适合发群或存档为日志</p></div>
+      <div class="head-actions">
+        <button class="btn sm ghost" id="bcRefresh" ${busy ? 'disabled' : ''}>刷新</button>
+        <button class="btn sm" id="bcAlert" ${busy ? 'disabled' : ''}>${busy === 'alert' ? '正在写简报…' : '生成异常简报'}</button>
+        <button class="btn sm primary" id="bcDaily" ${busy ? 'disabled' : ''}>${ico('spark')}${busy === 'daily' ? '正在播报…' : '生成今日播报'}</button>
+      </div>
+    </section>
+    ${state.broadcastError && !d ? `<div class="card empty"><h3>无法读取播报</h3><p>${esc(state.broadcastError)}</p></div>` : ''}
+    ${state.broadcastBusy && !d ? '<div class="card empty">正在读取历史播报…</div>' : ''}
+    ${latest ? broadcastCardHTML(latest) : (d ? '<div class="card empty"><h3>还没有播报</h3><p>点右上角「生成今日播报」，基于当前数据写一段；配置 AI 后语气会更自然。</p></div>' : '')}
+    ${hist.length > 1 ? `<div class="card bc-hist"><div class="bc-hist-head">历史播报 <span>保留最近 12 条</span></div>${hist.slice(1).map(b => `<div class="bc-hist-row"><div class="bc-hist-meta"><span class="bc-tone ${b.tone === 'alert' ? 'bad' : 'ok'}">${b.tone === 'alert' ? '异常' : '日常'}</span><span>${esc(fmtTime(b.time))}</span><span class="bc-ai">${b.ai ? 'AI' : '本地'}</span></div><p>${esc(String(b.text || '').split('\n')[0])}</p></div>`).join('')}</div>` : ''}
+    <p class="stock-note">播报只读取面板缓存的监控数据与事件，不会登录节点执行命令。未配置 AI 时使用本地模板，配置后自动切换为大模型撰写。</p>`;
+  $('#bcRefresh').addEventListener('click', () => loadBroadcast(true));
+  $('#bcDaily').addEventListener('click', () => genBroadcast('daily'));
+  $('#bcAlert').addEventListener('click', () => genBroadcast('alert'));
+  if (!d && !state.broadcastBusy && !state.broadcastError) setTimeout(() => { if (state.page === 'broadcast' && !state.subview) loadBroadcast(false); }, 0);
+}
+
+async function genBroadcast(tone) {
+  if (state.broadcastGen) return;
+  state.broadcastGen = tone;
+  renderPage();
+  try {
+    const d = await api('/api/broadcast', { method: 'POST', body: JSON.stringify({ tone }) });
+    if (d.ai_error) toast('AI 不可用，已生成本地播报');
+    else toast('播报已生成', 'success');
+  } catch (e) {
+    toast(e.message, 'error');
+  }
+  state.broadcastGen = '';
+  loadBroadcast(true);
+}
+
+/* ---------- insight: fault drill ---------- */
+
+const DRILL_CHECK = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12 5 5 9-10"/></svg>';
+
+function loadDrill(force) {
+  if (state.drillBusy) return;
+  state.drillBusy = true;
+  state.drillError = '';
+  api('/api/drill').then(d => {
+    state.drill = d;
+  }).catch(e => {
+    state.drillError = e.message;
+    if (force) toast(e.message, 'error');
+  }).finally(() => {
+    state.drillBusy = false;
+    if (state.page === 'drill' && !state.subview) renderPage();
+  });
+}
+
+function drillScoreColor(score) {
+  if (score >= 90) return 'var(--green)';
+  if (score >= 70) return 'var(--accent)';
+  if (score >= 50) return 'var(--amber)';
+  return 'var(--red)';
+}
+
+function drillPickScenario(id) {
+  state.drillPick = id;
+  state.drillSel = {};
+  state.drillNote = '';
+  state.drillResult = null;
+  renderPage();
+}
+
+function drillBackToList() {
+  state.drillPick = '';
+  state.drillSel = {};
+  state.drillNote = '';
+  state.drillResult = null;
+  renderPage();
+}
+
+function drillCardHTML(sc) {
+  return `<button class="drill-card" data-scenario="${esc(sc.id)}">
+    <div class="drill-card-head"><span class="drill-level ${sc.level === 'P1' ? 'p1' : 'p2'}">${esc(sc.level)}</span><span class="drill-tag">${esc(sc.tag)}</span><span class="drill-tag" style="margin-left:auto">${sc.key_steps} 个关键动作</span></div>
+    <h3>${esc(sc.title)}</h3>
+    <p>${esc(sc.scene)}</p>
+  </button>`;
+}
+
+function drillRunHTML(r) {
+  const color = drillScoreColor(r.score);
+  return `<details class="drill-run"><summary><span class="drill-run-sc" style="color:${color}">${r.score} 分</span><span class="drill-run-title">${esc(r.scenario)}</span><span class="drill-run-time">${esc(timeAgo(r.time))} · ${r.ai ? 'AI 点评' : '本地点评'}</span></summary><p>${esc(r.feedback || '')}</p></details>`;
+}
+
+function drillStepState(st) {
+  if (st.ok && st.selected) return ['ok', '已做对'];
+  if (st.ok) return ['miss', '遗漏'];
+  if (st.selected) return ['bad', '误选'];
+  return ['idle', '未涉及'];
+}
+
+function drillStageHTML(sc) {
+  const sel = state.drillSel;
+  return `
+    <section class="page-head">
+      <div><h1>${esc(sc.title)}</h1><p class="page-sub">${esc(sc.level)} · ${esc(sc.tag)} · 选出你会在故障现场执行的动作</p></div>
+      <div class="head-actions"><button class="btn sm ghost" data-drill="list">返回场景列表</button></div>
+    </section>
+    <div class="drill-detail">
+      <div class="card drill-brief">
+        <div class="drill-brief-head">${ico('drill')}<b>场景背景</b></div>
+        <p class="drill-scene">${esc(sc.scene)}</p>
+        <div class="drill-brief-head" style="margin-top:16px">${ico('activity')}<b>已知信号</b></div>
+        <div class="drill-signals">${sc.signals.map(s => `<span><i></i>${esc(s)}</span>`).join('')}</div>
+        <p class="stock-note" style="margin:16px 0 0">关键动作通常有 6 个；选中高风险动作会扣分。</p>
+      </div>
+      <div class="card">
+        <div class="drill-steps-head">可选处置动作 <span>已选 ${Object.keys(sel).length} 项</span></div>
+        <div class="drill-steps" id="drillSteps">
+          ${sc.steps.map(st => `<button class="drill-step${sel[st.id] ? ' on' : ''}" data-step="${esc(st.id)}"><span class="box">${DRILL_CHECK}</span><span>${esc(st.text)}</span></button>`).join('')}
+        </div>
+        <div class="field" style="margin-top:14px"><label>补充你的判断（可选）</label><textarea id="drillNote" rows="3" placeholder="例如：先保住旧 SSH 会话，再校验配置和防火墙...">${esc(state.drillNote)}</textarea></div>
+        <div class="drill-actions"><button class="btn primary" id="drillSubmit" ${state.drillEvalBusy ? 'disabled' : ''}>${state.drillEvalBusy ? '正在评分…' : '提交并评分'}</button></div>
+      </div>
+    </div>`;
+}
+
+function drillResultHTML() {
+  const res = state.drillResult;
+  const run = res.run || {};
+  const sc = ((state.drill && state.drill.scenarios) || []).find(s => s.id === state.drillPick);
+  const score = Number(run.score) || 0;
+  const color = drillScoreColor(score);
+  const passed = run.passed || [];
+  const missed = run.missed || [];
+  const wrong = run.wrong || [];
+  return `
+    <section class="page-head">
+      <div><h1>演练评分 · ${esc(sc ? sc.title : run.scenario || '')}</h1><p class="page-sub">${esc(res.verdict || '')} · ${run.ai ? 'AI 教官点评' : '本地教官点评'}</p></div>
+      <div class="head-actions">
+        <button class="btn sm ghost" data-drill="redo">重新演练</button>
+        <button class="btn sm" data-drill="list">返回场景列表</button>
+      </div>
+    </section>
+    <div class="drill-result">
+      <div class="card drill-score-card">
+        <div class="drill-ring" style="--p:${score};--ring-color:${color}"><div class="drill-ring-in"><b>${score}</b><small>分</small></div></div>
+        <div class="drill-verdict" style="color:${color}">${esc(res.verdict || '')}</div>
+        <div class="drill-score-sub">命中 ${passed.length} 个关键动作${wrong.length ? ` · 误选 ${wrong.length} 个` : ''}</div>
+      </div>
+      <div class="card">
+        <div class="drill-lists">
+          ${passed.length ? `<div class="drill-list ok"><b>${DRILL_CHECK} 做对的处置</b><ul>${passed.map(t => `<li>${esc(t)}</li>`).join('')}</ul></div>` : ''}
+          ${missed.length ? `<div class="drill-list warn"><b>遗漏的关键动作</b><ul>${missed.map(t => `<li>${esc(t)}</li>`).join('')}</ul></div>` : ''}
+          ${wrong.length ? `<div class="drill-list bad"><b>误选的高风险动作</b><ul>${wrong.map(t => `<li>${esc(t)}</li>`).join('')}</ul></div>` : ''}
+          ${!passed.length && !missed.length && !wrong.length ? '<div class="drill-list"><b>本场没有作答记录</b></div>' : ''}
+        </div>
+        <div class="drill-feedback"><b>教官点评</b>${esc(run.feedback || '')}</div>
+      </div>
+    </div>
+    <div class="card drill-detail-steps">
+      <div class="drill-steps-head">逐项判定 <span>灰色为未涉及动作，不计分</span></div>
+      ${(res.steps || []).map(st => {
+        const stt = drillStepState(st);
+        return `<div class="drill-detail-row ${stt[0]}"><span class="tag">${stt[1]}</span><div><b>${esc(st.text)}</b><p>${esc(st.why || '')}</p></div></div>`;
+      }).join('')}
+    </div>`;
+}
+
+function renderDrill() {
+  const page = $('#page');
+  if (!page) return;
+  if (state.drillResult) {
+    page.innerHTML = drillResultHTML();
+    page.addEventListener('click', e => {
+      if (e.target.closest('[data-drill="redo"]')) {
+        state.drillResult = null;
+        state.drillSel = {};
+        state.drillNote = '';
+        renderPage();
+      } else if (e.target.closest('[data-drill="list"]')) {
+        drillBackToList();
+      }
+    });
+    return;
+  }
+  const d = state.drill;
+  const scs = (d && d.scenarios) || [];
+  const runs = (d && d.runs) || [];
+  const picked = scs.find(s => s.id === state.drillPick);
+  if (picked) {
+    page.innerHTML = drillStageHTML(picked);
+    $('#drillSteps').addEventListener('click', e => {
+      const step = e.target.closest('[data-step]');
+      if (!step) return;
+      const id = step.dataset.step;
+      if (state.drillSel[id]) delete state.drillSel[id];
+      else state.drillSel[id] = true;
+      step.classList.toggle('on', !!state.drillSel[id]);
+      const head = page.querySelector('.drill-steps-head span');
+      if (head) head.textContent = `已选 ${Object.keys(state.drillSel).length} 项`;
+    });
+    $('#drillNote').addEventListener('input', e => { state.drillNote = e.target.value; });
+    $('#drillSubmit').addEventListener('click', submitDrill);
+    page.addEventListener('click', e => {
+      if (e.target.closest('[data-drill="list"]')) drillBackToList();
+    });
+    return;
+  }
+  page.innerHTML = `
+    <section class="page-head">
+      <div><h1>故障演练场</h1><p class="page-sub">6 个真实故障场景，选出你认为正确的处置动作，由本地规则或 AI 教官评分</p></div>
+      <div class="head-actions"><button class="btn sm ghost" id="drillRefresh" ${state.drillBusy ? 'disabled' : ''}>刷新</button></div>
+    </section>
+    ${state.drillError && !d ? `<div class="card empty"><h3>无法加载演练场景</h3><p>${esc(state.drillError)}</p></div>` : ''}
+    ${state.drillBusy && !d ? '<div class="card empty">正在准备演练场景…</div>' : ''}
+    ${scs.length ? `<div class="drill-grid">${scs.map(drillCardHTML).join('')}</div>` : ''}
+    ${d ? `<div class="card drill-history"><div class="drill-history-head">演练记录 <span>保留最近 20 次</span></div>${runs.length ? runs.map(drillRunHTML).join('') : '<div class="bc-hist-empty">还没有演练记录，选一个场景开始吧。</div>'}</div>` : ''}
+    <p class="stock-note">演练完全虚拟：不会登录节点、不会改动任何配置，仅用于熟悉排查顺序与风险边界。</p>`;
+  $('#drillRefresh').addEventListener('click', () => loadDrill(true));
+  page.addEventListener('click', e => {
+    const card = e.target.closest('[data-scenario]');
+    if (card) drillPickScenario(card.dataset.scenario);
+  });
+  if (!d && !state.drillBusy && !state.drillError) setTimeout(() => { if (state.page === 'drill' && !state.subview) loadDrill(false); }, 0);
+}
+
+async function submitDrill() {
+  if (state.drillEvalBusy) return;
+  const sc = ((state.drill && state.drill.scenarios) || []).find(s => s.id === state.drillPick);
+  if (!sc) return;
+  const steps = Object.keys(state.drillSel);
+  if (!steps.length) return toast('至少选择一个处置动作', 'error');
+  state.drillEvalBusy = true;
+  const btn = $('#drillSubmit');
+  if (btn) { btn.disabled = true; btn.textContent = '正在评分…'; }
+  try {
+    const d = await api('/api/drill/eval', { method: 'POST', body: JSON.stringify({ scenario: sc.id, steps, note: state.drillNote }) });
+    state.drillResult = d;
+    if (state.drill) state.drill.runs = [d.run].concat(state.drill.runs || []);
+    if (d.ai_error) toast('AI 点评不可用，已使用本地点评');
+  } catch (e) {
+    toast(e.message, 'error');
+  }
+  state.drillEvalBusy = false;
+  if (state.page === 'drill' && !state.subview) renderPage();
+}
+
+/* ---------- insight: cross-node root cause ---------- */
+
+function shortClock(unix) {
+  if (!unix) return '-';
+  const d = new Date(unix * 1000);
+  if (isNaN(d.getTime())) return '-';
+  const pad = v => String(v).padStart(2, '0');
+  return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+function loadRootCause(force) {
+  if (state.rcBusy) return;
+  state.rcBusy = true;
+  state.rcError = '';
+  api('/api/rootcause?hours=' + state.rcHours).then(d => {
+    state.rc = d;
+  }).catch(e => {
+    state.rcError = e.message;
+    if (force) toast(e.message, 'error');
+  }).finally(() => {
+    state.rcBusy = false;
+    if (state.page === 'rootcause' && !state.subview) renderPage();
+  });
+}
+
+function rcSignalHTML(sig) {
+  return `<div class="rc-sig"><time>${esc(shortClock(sig.time))}</time><b>${esc(sig.node_name)}</b><span>${esc(sig.detail)}</span></div>`;
+}
+
+function rcSuspectHTML(sp) {
+  return `<div class="rc-suspect"><div><div class="nm">${esc(sp.node_name)}</div><div class="why">${esc((sp.reasons || []).join(' · '))}</div></div><div class="rc-bar"><i style="width:${Math.min(100, sp.score)}%"></i></div><b class="score">${sp.score}</b></div>`;
+}
+
+function rcClusterHTML(c) {
+  const sev = ['high', 'medium', 'low'].includes(c.severity) ? c.severity : 'low';
+  const labels = { high: '高影响', medium: '中影响', low: '低影响' };
+  return `<div class="card rc-cluster">
+    <div class="rc-cluster-head">
+      <span class="rc-sev ${sev}">${labels[sev]}</span>
+      <h3>${esc(c.title)}</h3>
+      <span class="rc-time">${esc(shortClock(c.start))} - ${esc(shortClock(c.end))}</span>
+    </div>
+    <p class="rc-hyp">${esc(c.hypothesis)}</p>
+    <div class="rc-conf"><span>置信度</span><div class="rc-bar"><i style="width:${Math.min(100, c.confidence)}%"></i></div><b>${c.confidence}%</b></div>
+    <div class="rc-signals">${(c.signals || []).map(rcSignalHTML).join('')}</div>
+    ${(c.advice || []).length ? `<div class="rc-advice"><b>建议排查</b><ul>${c.advice.map(a => `<li>${esc(a)}</li>`).join('')}</ul></div>` : ''}
+  </div>`;
+}
+
+function rcHeroHTML(d) {
+  return `<div class="card rc-hero">
+    <div class="rc-count"><b>${d.signal_count}</b><span>过去 ${d.window_hours} 小时异常信号</span></div>
+    <div><p class="rc-summary">${esc(d.summary)}</p>${d.empty ? '' : `<div class="rc-meta">${d.nodes} 台节点参与分析 · ${(d.clusters || []).length} 组关联</div>`}</div>
+  </div>`;
+}
+
+function renderRootCause() {
+  const page = $('#page');
+  if (!page) return;
+  const d = state.rc;
+  const seg = [6, 24, 72].map(h => `<button class="${state.rcHours === h ? 'active' : ''}" data-rc-hours="${h}">${h}h</button>`).join('');
+  page.innerHTML = `
+    <section class="page-head">
+      <div><h1>跨节点根因分析</h1><p class="page-sub">把节点事件与拨测失败按时间聚合，给出关联假设、置信度和重点怀疑节点</p></div>
+      <div class="head-actions">
+        <div class="seg" id="rcSeg">${seg}</div>
+        <button class="btn sm ghost" id="rcRefresh" ${state.rcBusy ? 'disabled' : ''}>刷新</button>
+        ${state.hasAIKey && d && !d.empty ? `<button class="btn sm primary" id="rcAI" ${state.rcAIBusy ? 'disabled' : ''}>${ico('spark')}${state.rcAIBusy ? '分析中…' : 'AI 深度分析'}</button>` : ''}
+      </div>
+    </section>
+    ${state.rcError && !d ? `<div class="card empty"><h3>分析失败</h3><p>${esc(state.rcError)}</p></div>` : ''}
+    ${state.rcBusy && !d ? '<div class="card empty">正在扫描事件与拨测记录…</div>' : ''}
+    ${d ? rcHeroHTML(d) : ''}
+    ${state.rcAIBusy ? '<div class="card empty">AI 正在阅读事件时间线并撰写分析…</div>' : ''}
+    ${state.rcAI ? `<div class="card rc-ai"><b>AI 深度分析</b><div class="rc-ai-body">${esc(state.rcAI)}</div></div>` : ''}
+    ${d && !d.empty && (d.suspects || []).length ? `<div class="card rc-card"><div class="rc-block-head">重点怀疑节点 <span>按异常信号加权</span></div><div class="rc-suspects">${d.suspects.map(rcSuspectHTML).join('')}</div></div>` : ''}
+    ${d && (d.clusters || []).length ? `<div class="rc-block-head" style="margin:18px 0 10px">关联事件聚类 <span>${d.clusters.length} 组</span></div>${d.clusters.map(rcClusterHTML).join('')}` : ''}
+    ${d && !d.empty && !(d.clusters || []).length ? `<div class="card empty"><h3>暂未形成关联</h3><p>${esc(d.summary)}</p></div>` : ''}
+    ${d && !d.empty && (d.signals || []).length ? `<div class="card rc-card"><div class="rc-block-head">全部异常信号 <span>最近 ${d.signals.length} 条</span></div><div class="rc-signals">${d.signals.map(rcSignalHTML).join('')}</div></div>` : ''}
+    <p class="stock-note">信号来自面板缓存的节点事件与拨测状态，分析过程不会登录节点。置信度是规则相关性的估计值，请结合故障回放与变更记录判断。</p>`;
+  $('#rcSeg').addEventListener('click', e => {
+    const b = e.target.closest('[data-rc-hours]');
+    if (!b) return;
+    const h = Number(b.dataset.rcHours);
+    if (!h || h === state.rcHours) return;
+    state.rcHours = h;
+    state.rc = null;
+    state.rcAI = '';
+    loadRootCause(true);
+  });
+  $('#rcRefresh').addEventListener('click', () => loadRootCause(true));
+  const aiBtn = $('#rcAI');
+  if (aiBtn) aiBtn.addEventListener('click', genRootCauseAI);
+  if (!d && !state.rcBusy && !state.rcError) setTimeout(() => { if (state.page === 'rootcause' && !state.subview) loadRootCause(false); }, 0);
+}
+
+async function genRootCauseAI() {
+  if (state.rcAIBusy) return;
+  state.rcAIBusy = true;
+  state.rcAI = '';
+  renderPage();
+  try {
+    const d = await api('/api/rootcause/ai', { method: 'POST', body: JSON.stringify({ hours: state.rcHours }) });
+    state.rcAI = d.text || '';
+  } catch (e) {
+    toast(e.message, 'error');
+  }
+  state.rcAIBusy = false;
+  if (state.page === 'rootcause' && !state.subview) renderPage();
+}
+
+/* ---------- insight: natural language metric query ---------- */
+
+const ASK_SAMPLES = [
+  '最近 24 小时 CPU 最高的节点',
+  '今天内存超过 80% 的节点',
+  '过去 7 天各节点磁盘平均',
+  '当前负载',
+  '最近 1 小时温度最高',
+];
+
+function fmtAskValue(kind, v) {
+  const n = Number(v);
+  if (!isFinite(n)) return '—';
+  switch (kind) {
+    case 'percent': return `${n.toFixed(1)}%`;
+    case 'bytes': return `${fmtBytes(n)}/s`;
+    case 'load': return n.toFixed(2);
+    case 'temp': return `${Math.round(n)}°C`;
+    case 'count': return `${Math.round(n)} 个`;
+    default: return n.toFixed(1);
+  }
+}
+
+function askSparkline(points, kind, nodeName) {
+  if (!points || points.length < 2) return '';
+  const w = 720, h = 170, pad = 12;
+  const minX = points[0].time, maxX = points[points.length - 1].time;
+  let minY = Infinity, maxY = -Infinity;
+  for (const p of points) {
+    if (p.value < minY) minY = p.value;
+    if (p.value > maxY) maxY = p.value;
+  }
+  if (!isFinite(minY) || !isFinite(maxY)) return '';
+  if (minY === maxY) { minY = Math.max(0, minY - 1); maxY += 1; }
+  const spanX = maxX - minX || 1;
+  const spanY = maxY - minY || 1;
+  const X = t => pad + ((t - minX) / spanX) * (w - pad * 2);
+  const Y = v => pad + (1 - (v - minY) / spanY) * (h - pad * 2 - 14);
+  let path = '';
+  points.forEach((p, i) => { path += `${i ? 'L' : 'M'}${X(p.time).toFixed(1)} ${Y(p.value).toFixed(1)}`; });
+  const area = `${path} L${X(maxX).toFixed(1)} ${h - 14} L${X(minX).toFixed(1)} ${h - 14} Z`;
+  return `<div class="ask-spark">
+    <svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" aria-hidden="true">
+      <defs><linearGradient id="askFill" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="var(--accent)" stop-opacity=".2"/><stop offset="1" stop-color="var(--accent)" stop-opacity="0"/></linearGradient></defs>
+      <path class="area" d="${area}" fill="url(#askFill)"/>
+      <path class="line" d="${path}" fill="none"/>
+    </svg>
+    <div class="lbl"><span>${esc(fmtTime(minX))}</span><span>${esc(nodeName || '')} · 峰值 ${esc(fmtAskValue(kind, maxY))}</span><span>${esc(fmtTime(maxX))}</span></div>
+  </div>`;
+}
+
+function askResultHTML(res) {
+  const spec = res.spec || {};
+  const big = res.value == null ? '—' : res.mode === 'threshold' ? `${Math.round(Number(res.value) || 0)} 台` : fmtAskValue(res.unit_kind, res.value);
+  const specTags = [
+    ['时间窗', spec.window || `${spec.hours || 24} 小时`],
+    ['指标', res.metric_label || ''],
+    ['口径', res.mode === 'threshold' ? `超过 ${fmtAskValue(res.unit_kind, spec.threshold)}` : (res.agg_label || '')],
+    spec.node ? ['节点', spec.node] : null,
+  ].filter(Boolean);
+  const rows = res.rows || [];
+  const table = res.mode === 'threshold'
+    ? `<div class="table-wrap"><table class="table ask-table"><thead><tr><th>节点</th><th class="num">超过阈值</th><th class="num">占比</th><th class="num">峰值</th><th>峰值时间</th></tr></thead><tbody>
+        ${rows.map(r => `<tr><td>${esc(r.node_name)}${r.online ? '' : ' <span class="tag-soft">离线</span>'}</td><td class="num">${r.above_count} 次</td><td class="num">${(Number(r.above_pct) || 0).toFixed(0)}%</td><td class="num">${esc(fmtAskValue(res.unit_kind, r.value))}</td><td class="muted">${esc(fmtTime(r.at))}</td></tr>`).join('')}
+      </tbody></table></div>`
+    : `<div class="table-wrap"><table class="table ask-table"><thead><tr><th>节点</th><th class="num">${esc(res.agg_label || '数值')}</th><th>时间</th><th class="num">采样点</th></tr></thead><tbody>
+        ${rows.map(r => `<tr><td>${esc(r.node_name)}${r.online ? '' : ' <span class="tag-soft">离线</span>'}</td><td class="num">${esc(fmtAskValue(res.unit_kind, r.value))}</td><td class="muted">${esc(fmtTime(r.at))}</td><td class="num">${r.points}</td></tr>`).join('')}
+      </tbody></table></div>`;
+  return `<div class="card ask-card">
+    <div class="ask-answer-head">
+      <b class="ask-big">${esc(big)}</b>
+      <span>${esc(res.metric_label || '')} · ${esc(res.agg_label || '')}</span>
+      <span class="ask-parser">${res.parser === 'AI' ? 'AI 解析' : '本地解析'}</span>
+    </div>
+    <p class="ask-answer">${esc(res.answer || '')}</p>
+    <div class="ask-spec">${specTags.map(t => `<span><em>${esc(t[0])}</em> ${esc(t[1])}</span>`).join('')}<span><em>节点</em> ${res.nodes} 台</span><span><em>采样</em> ${res.samples} 条</span></div>
+    ${res.series && res.series.length > 1 ? askSparkline(res.series, res.unit_kind, res.series_node) : ''}
+    ${rows.length ? table : '<div class="empty" style="padding:20px 0 4px">这个时间窗里没有节点满足条件</div>'}
+    ${res.ai_error ? `<p class="stock-note" style="margin-top:12px">AI 解析不可用：${esc(res.ai_error)}</p>` : ''}
+  </div>`;
+}
+
+function renderAsk() {
+  const page = $('#page');
+  if (!page) return;
+  const res = state.askResult;
+  page.innerHTML = `
+    <section class="page-head">
+      <div><h1>指标问答</h1><p class="page-sub">用中文直接问历史监控数据：谁最高、谁超过阈值、一段时间内的平均</p></div>
+      <div class="head-actions"><span class="updated">数据来自面板保留的采样历史</span></div>
+    </section>
+    <div class="ask-bar">
+      <div class="ask-input">${ico('search')}<input id="askInput" maxlength="200" spellcheck="false" placeholder="例如：最近 6 小时 CPU 平均最高的节点" value="${esc(state.askQ)}"></div>
+      <button class="btn primary" id="askGo" ${state.askBusy ? 'disabled' : ''}>${state.askBusy ? '查询中…' : '查询'}</button>
+    </div>
+    <div class="ask-chips">${ASK_SAMPLES.map(s => `<button class="ask-chip" data-askq="${esc(s)}">${esc(s)}</button>`).join('')}</div>
+    ${state.askBusy ? '<div class="card empty">正在扫描节点历史采样…</div>' : ''}
+    ${state.askError ? `<div class="card empty"><h3>没有查到</h3><p>${esc(state.askError)}</p></div>` : ''}
+    ${res ? askResultHTML(res) : ''}
+    <p class="stock-note">查询只读历史采样，不会登录节点；最新数据依赖面板持续运行，时间窗越长越可能包含空档。</p>`;
+  const go = () => askSubmit($('#askInput').value);
+  $('#askGo').addEventListener('click', go);
+  $('#askInput').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); go(); } });
+  page.addEventListener('click', e => {
+    const chip = e.target.closest('[data-askq]');
+    if (chip) askSubmit(chip.dataset.askq);
+  });
+  if (!res && !state.askBusy && !state.askError) setTimeout(() => { const el = $('#askInput'); if (el && state.page === 'ask') el.focus(); }, 0);
+}
+
+function askSubmit(q) {
+  const query = String(q || '').trim();
+  if (!query) return toast('请输入要查询的内容', 'error');
+  if (state.askBusy) return;
+  state.askQ = query;
+  state.askBusy = true;
+  state.askError = '';
+  state.askResult = null;
+  renderPage();
+  api('/api/query', { method: 'POST', body: JSON.stringify({ q: query }) }).then(d => {
+    state.askResult = d;
+  }).catch(e => {
+    state.askError = e.message;
+  }).finally(() => {
+    state.askBusy = false;
+    if (state.page === 'ask' && !state.subview) renderPage();
   });
 }
 
