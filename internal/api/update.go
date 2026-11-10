@@ -309,7 +309,7 @@ func (s *Server) handleUpdateInstall(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 	go func() {
-		time.Sleep(1200 * time.Millisecond)
+		time.Sleep(700 * time.Millisecond)
 		os.Exit(0)
 	}()
 }

@@ -2770,6 +2770,7 @@ body.dark .upd-notes pre { background: #0d1520; }
   .dc-hud .dc-kicker { display: none; }
   .dc-hud-main b { font-size: 20px; }
   .dc-hud-stats { gap: 8px; margin-top: 1px; font-size: 9.5px; }
+  .dc-core-label .dc-kicker { display: none; }
   .dc-core-label b { font-size: 30px; }
   .dc-core-label b em { font-size: 13px; }
   .dc-core-sub { font-size: 8.5px; }
