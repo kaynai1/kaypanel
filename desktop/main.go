@@ -76,6 +76,7 @@ const (
 	gwlExStyle      = -20
 	gwlWndProc      = -4
 	wsCaption       = 0x00C00000
+	wsThickFrame    = 0x00040000
 	wsExToolWindow  = 0x00000080
 	wsExAppWindow   = 0x00040000
 	swpNoSize       = 0x0001
@@ -310,11 +311,12 @@ var (
 	trayTipText   string
 	showEvent     uintptr
 
-	mainWeb    webview2.WebView
-	appURL     string
-	widgetOn   bool
-	widgetMax  bool
-	widgetPrev winRect
+	mainWeb         webview2.WebView
+	appURL          string
+	widgetOn        bool
+	widgetMax       bool
+	widgetPrev      winRect
+	widgetPrevStyle uintptr
 )
 
 // Maximizing a caption-less thick-frame window covers the taskbar, so clamp
@@ -611,6 +613,12 @@ func enterWidgetMode(hwnd uintptr) {
 		procShowWindow.Call(hwnd, swRestore)
 	}
 	procGetWindowRect.Call(hwnd, uintptr(unsafe.Pointer(&widgetPrev)))
+	// A thick frame keeps a ~7px non-client band that shows the window's white
+	// class background around the dark widget; drop it so the page fills the
+	// whole topmost window while the widget is active.
+	style, _, _ := procGetWindowLongPtr.Call(hwnd, ptrIndex(gwlStyle))
+	widgetPrevStyle = style
+	procSetWindowLongPtr.Call(hwnd, ptrIndex(gwlStyle), style&^wsThickFrame)
 	ex, _, _ := procGetWindowLongPtr.Call(hwnd, ptrIndex(gwlExStyle))
 	ex |= wsExToolWindow
 	ex &^= wsExAppWindow
@@ -647,6 +655,10 @@ func exitWidgetMode(hwnd uintptr) {
 	ex &^= wsExToolWindow
 	ex |= wsExAppWindow
 	procSetWindowLongPtr.Call(hwnd, ptrIndex(gwlExStyle), ex)
+	if widgetPrevStyle != 0 {
+		procSetWindowLongPtr.Call(hwnd, ptrIndex(gwlStyle), widgetPrevStyle)
+		widgetPrevStyle = 0
+	}
 
 	w := int64(widgetPrev.Right - widgetPrev.Left)
 	h := int64(widgetPrev.Bottom - widgetPrev.Top)
