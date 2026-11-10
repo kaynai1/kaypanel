@@ -6,10 +6,12 @@ import (
 	"context"
 	"errors"
 	"log"
+	"math"
 	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 	"unsafe"
@@ -27,6 +29,7 @@ var (
 	user32dll                    = windows.NewLazySystemDLL("user32.dll")
 	kernel32dll                  = windows.NewLazySystemDLL("kernel32.dll")
 	shell32dll                   = windows.NewLazySystemDLL("shell32.dll")
+	gdi32dll                     = windows.NewLazySystemDLL("gdi32.dll")
 	procGetWindowLongPtr         = user32dll.NewProc("GetWindowLongPtrW")
 	procSetWindowLongPtr         = user32dll.NewProc("SetWindowLongPtrW")
 	procSetWindowPos             = user32dll.NewProc("SetWindowPos")
@@ -53,6 +56,13 @@ var (
 	procSetMenuDefaultItem       = user32dll.NewProc("SetMenuDefaultItem")
 	procDestroyMenu              = user32dll.NewProc("DestroyMenu")
 	procShellNotifyIcon          = shell32dll.NewProc("Shell_NotifyIconW")
+	procCreateIconIndirect       = user32dll.NewProc("CreateIconIndirect")
+	procDestroyIcon              = user32dll.NewProc("DestroyIcon")
+	procCreateCompatibleDC       = gdi32dll.NewProc("CreateCompatibleDC")
+	procCreateDIBSection         = gdi32dll.NewProc("CreateDIBSection")
+	procCreateBitmap             = gdi32dll.NewProc("CreateBitmap")
+	procDeleteObject             = gdi32dll.NewProc("DeleteObject")
+	procDeleteDC                 = gdi32dll.NewProc("DeleteDC")
 	procGetModuleHandle          = kernel32dll.NewProc("GetModuleHandleW")
 	procCreateEventW             = kernel32dll.NewProc("CreateEventW")
 	procOpenEventW               = kernel32dll.NewProc("OpenEventW")
@@ -159,6 +169,28 @@ type notifyIconData struct {
 	DwInfoFlags      uint32
 	GuidItem         windows.GUID
 	HBalloonIcon     uintptr
+}
+
+type bitmapInfoHeader struct {
+	BiSize          uint32
+	BiWidth         int32
+	BiHeight        int32
+	BiPlanes        uint16
+	BiBitCount      uint16
+	BiCompression   uint32
+	BiSizeImage     uint32
+	BiXPelsPerMeter int32
+	BiYPelsPerMeter int32
+	BiClrUsed       uint32
+	BiClrImportant  uint32
+}
+
+type iconInfo struct {
+	FIcon    int32
+	XHotspot uint32
+	YHotspot uint32
+	HbmMask  uintptr
+	HbmColor uintptr
 }
 
 func init() {
@@ -273,7 +305,10 @@ var (
 	trayAdded    bool
 	balloonShown bool
 	trayNid      notifyIconData
-	showEvent    uintptr
+	trayLevelIcon uintptr
+	trayLevel     string
+	trayTipText   string
+	showEvent     uintptr
 
 	mainWeb    webview2.WebView
 	appURL     string
@@ -336,11 +371,147 @@ func addTray(hwnd uintptr) {
 }
 
 func removeTray() {
+	if trayLevelIcon != 0 {
+		procDestroyIcon.Call(trayLevelIcon)
+		trayLevelIcon = 0
+	}
 	if !trayAdded {
 		return
 	}
 	procShellNotifyIcon.Call(nimDelete, uintptr(unsafe.Pointer(&trayNid)))
 	trayAdded = false
+}
+
+func trayColor(level string) [3]byte {
+	switch level {
+	case "ok":
+		return [3]byte{34, 197, 94}
+	case "warn":
+		return [3]byte{245, 158, 11}
+	case "crit":
+		return [3]byte{239, 68, 68}
+	default:
+		return [3]byte{148, 163, 184}
+	}
+}
+
+func clamp01(v float64) float64 {
+	if v < 0 {
+		return 0
+	}
+	if v > 1 {
+		return 1
+	}
+	return v
+}
+
+// makeDotIcon renders a small status LED: colored disc with a white rim so it
+// stays legible on both light and dark taskbars. Pixels are premultiplied BGRA.
+func makeDotIcon(level string) uintptr {
+	cx, _, _ := procGetSystemMetrics.Call(smCxSmIcon)
+	cy, _, _ := procGetSystemMetrics.Call(smCySmIcon)
+	w, h := int(cx), int(cy)
+	if w < 12 || w > 64 {
+		w = 16
+	}
+	if h < 12 || h > 64 {
+		h = w
+	}
+	hdc, _, _ := procCreateCompatibleDC.Call(0)
+	if hdc == 0 {
+		return 0
+	}
+	defer procDeleteDC.Call(hdc)
+
+	bi := bitmapInfoHeader{
+		BiSize:        uint32(unsafe.Sizeof(bitmapInfoHeader{})),
+		BiWidth:       int32(w),
+		BiHeight:      int32(-h),
+		BiPlanes:      1,
+		BiBitCount:    32,
+		BiCompression: 0,
+	}
+	var bits unsafe.Pointer
+	hbm, _, _ := procCreateDIBSection.Call(hdc, uintptr(unsafe.Pointer(&bi)), 0, uintptr(unsafe.Pointer(&bits)), 0, 0)
+	if hbm == 0 || bits == nil {
+		return 0
+	}
+	defer procDeleteObject.Call(hbm)
+
+	fill := trayColor(level)
+	pix := unsafe.Slice((*byte)(bits), w*h*4)
+	radius := math.Min(float64(w), float64(h))/2 - 1.2
+	cx0 := float64(w) / 2
+	cy0 := float64(h) / 2
+	for y := 0; y < h; y++ {
+		for x := 0; x < w; x++ {
+			dx := float64(x) + 0.5 - cx0
+			dy := float64(y) + 0.5 - cy0
+			d := math.Sqrt(dx*dx + dy*dy)
+			disc := clamp01(radius - 1.1 - d + 0.5)
+			ring := clamp01(radius-d+0.5) - disc
+			i := (y*w + x) * 4
+			pix[i] = byte(float64(fill[2])*disc + 255*ring)
+			pix[i+1] = byte(float64(fill[1])*disc + 255*ring)
+			pix[i+2] = byte(float64(fill[0])*disc + 255*ring)
+			pix[i+3] = byte((disc + ring) * 255)
+		}
+	}
+
+	stride := (w + 15) / 16 * 2
+	mask := make([]byte, stride*h)
+	hMask, _, _ := procCreateBitmap.Call(uintptr(w), uintptr(h), 1, 1, uintptr(unsafe.Pointer(&mask[0])))
+	if hMask == 0 {
+		return 0
+	}
+	defer procDeleteObject.Call(hMask)
+	ii := iconInfo{FIcon: 1, HbmMask: hMask, HbmColor: hbm}
+	hIcon, _, _ := procCreateIconIndirect.Call(uintptr(unsafe.Pointer(&ii)))
+	return hIcon
+}
+
+func trayTipUTF16(s string) []uint16 {
+	u := windows.StringToUTF16(s)
+	if len(u) > 120 {
+		u = u[:120]
+		for len(u) > 0 && u[len(u)-1] >= 0xD800 && u[len(u)-1] <= 0xDBFF {
+			u = u[:len(u)-1]
+		}
+	}
+	return u
+}
+
+func setTrayLevel(level, tip string) {
+	switch level {
+	case "ok", "warn", "crit":
+	default:
+		level = "unknown"
+	}
+	tip = strings.TrimSpace(tip)
+	if level == trayLevel && tip == trayTipText {
+		return
+	}
+	trayLevel, trayTipText = level, tip
+	if !trayAdded {
+		return
+	}
+	icon := makeDotIcon(level)
+	if icon == 0 {
+		return
+	}
+	nid := trayNid
+	nid.HIcon = icon
+	nid.UFlags = nifIcon | nifTip
+	nid.SzTip = [128]uint16{}
+	copy(nid.SzTip[:], trayTipUTF16("KayPanel "+version+" · "+tip))
+	if ok, _, _ := procShellNotifyIcon.Call(nimModify, uintptr(unsafe.Pointer(&nid))); ok != 0 {
+		if trayLevelIcon != 0 {
+			procDestroyIcon.Call(trayLevelIcon)
+		}
+		trayLevelIcon = icon
+	} else {
+		procDestroyIcon.Call(icon)
+	}
 }
 
 func notifyHidden() {
@@ -597,6 +768,10 @@ func bindWindow(w webview2.WebView) {
 		case "open":
 			showMain(hwnd)
 		}
+		return ""
+	})
+	_ = w.Bind("kaypanelTray", func(level, tip string) string {
+		setTrayLevel(level, tip)
 		return ""
 	})
 }

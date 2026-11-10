@@ -1,6 +1,6 @@
 'use strict';
 
-const TOP_PAGES = ['overview', 'topology', 'personality', 'timeline', 'containers', 'apps', 'files', 'terminal', 'ai', 'settings'];
+const TOP_PAGES = ['overview', 'topology', 'personality', 'timeline', 'stocks', 'park', 'containers', 'apps', 'files', 'terminal', 'ai', 'settings'];
 const $ = (sel, el = document) => el.querySelector(sel);
 const $$ = (sel, el = document) => Array.from(el.querySelectorAll(sel));
 
@@ -63,6 +63,15 @@ const state = {
   aiStackResult: null,
   aiStackError: '',
   trendMetric: 'cpu',
+  theme: localStorage.getItem('kp_theme') === 'dark' ? 'dark' : 'light',
+  stockTimer: null,
+  parkTimer: null,
+  parkTab: localStorage.getItem('kp_park_tab') || 'pets',
+  ambientRAF: null,
+  ambientResize: null,
+  paletteOpen: false,
+  paletteIndex: 0,
+  paletteFiltered: [],
   autoRefresh: prefOn('kp_auto'),
   procOn: prefOn('kp_proc'),
   alertOn: prefOn('kp_alert'),
@@ -108,6 +117,14 @@ const ICON_PATHS = {
   widget: '<rect x="3" y="4" width="18" height="13" rx="2"/><rect x="12.5" y="10" width="6.5" height="4.6" rx="1"/><path d="M8 20h8"/>',
   play: '<path d="M8 5.2v13.6L19 12 8 5.2Z"/>',
   pause: '<path d="M9 5v14M15 5v14"/>',
+  stocks: '<path d="M3 20V4"/><path d="M3 20h18"/><rect x="7" y="9" width="3" height="8" rx=".8"/><rect x="12.5" y="5.5" width="3" height="11.5" rx=".8"/><rect x="18" y="12" width="3" height="5" rx=".8"/>',
+  park: '<circle cx="6.5" cy="8.5" r="1.9"/><circle cx="12" cy="6" r="1.9"/><circle cx="17.5" cy="8.5" r="1.9"/><path d="M12 10.5c-3.1 0-5.6 2.5-5.6 5.1 0 2 1.5 3.4 3.5 3.4 1 0 1.6-.4 2.1-.4s1.1.4 2.1.4c2 0 3.5-1.4 3.5-3.4 0-2.6-2.5-5.1-5.6-5.1Z"/>',
+  ambient: '<path d="M12 3.5l1.8 4.8 4.7 1.8-4.7 1.8L12 16.7l-1.8-4.8-4.7-1.8 4.7-1.8L12 3.5Z"/><path d="M18.5 15.5l.8 2.1 2.2.9-2.2.8-.8 2.2-.9-2.2-2.1-.8 2.1-.9.9-2.1Z"/>',
+  command: '<path d="M9 6a3 3 0 1 0-3 3h12a3 3 0 1 0-3-3v12a3 3 0 1 0 3-3H6a3 3 0 1 0 3 3V6Z"/>',
+  moon: '<path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a7 7 0 1 0 10.5 10.5Z"/>',
+  sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
+  trophy: '<path d="M8 3h8v5a4 4 0 0 1-8 0V3Z"/><path d="M8 4H5v2a3 3 0 0 0 3 3M16 4h3v2a3 3 0 0 1-3 3"/><path d="M12 12v5M8 21h8M10 17h4"/>',
+  search: '<circle cx="11" cy="11" r="6.5"/><path d="m16 16 5 5"/>',
 };
 
 function ico(name, cls = '') {
@@ -241,6 +258,50 @@ function wsURL(path) {
   return (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + path;
 }
 
+/* ---------- theme & tray ---------- */
+
+function applyTheme(theme) {
+  state.theme = theme === 'dark' ? 'dark' : 'light';
+  document.body.classList.toggle('dark', state.theme === 'dark');
+  document.documentElement.style.colorScheme = state.theme;
+  localStorage.setItem('kp_theme', state.theme);
+  const btn = $('#topTheme');
+  if (btn) {
+    btn.innerHTML = ico(state.theme === 'dark' ? 'sun' : 'moon');
+    btn.title = state.theme === 'dark' ? '切换浅色模式' : '切换深色模式';
+  }
+}
+
+function toggleTheme() {
+  applyTheme(state.theme === 'dark' ? 'light' : 'dark');
+  toast(state.theme === 'dark' ? '已切换到深色主题' : '已切换到浅色主题', '', 1800);
+  if (typeof checkAchievements === 'function') checkAchievements();
+}
+
+function traySummary(nodes) {
+  const real = (nodes || []).filter(n => !n.sftp_only);
+  const online = real.filter(n => n.online).length;
+  if (!real.length) return { level: 'unknown', tip: '尚未添加节点' };
+  if (online < real.length) return { level: 'crit', tip: `${online}/${real.length} 台在线 · 有节点离线` };
+  const st = state.settings || {};
+  let warn = false;
+  for (const n of real) {
+    const m = n.latest || {};
+    const cpu = Number(m.cpu) || 0;
+    const mem = pct(m.mem_used, m.mem_total);
+    const disk = pct(m.disk_used, m.disk_total);
+    if (cpu >= 95 || mem >= 95 || disk >= 95) return { level: 'crit', tip: `${real.length} 台在线 · ${n.name} 资源告急` };
+    if (cpu >= (st.cpu_alert || 90) || mem >= (st.mem_alert || 90) || disk >= (st.disk_alert || 90)) warn = true;
+  }
+  return warn ? { level: 'warn', tip: `${real.length} 台在线 · 有指标超过告警线` } : { level: 'ok', tip: `${real.length} 台在线 · 状态良好` };
+}
+
+function syncTray() {
+  if (typeof window.kaypanelTray !== 'function') return;
+  const s = traySummary(state.nodes);
+  try { window.kaypanelTray(s.level, s.tip); } catch (e) { /* desktop shell handles old versions */ }
+}
+
 /* ---------- login ---------- */
 
 function showLogin() {
@@ -316,6 +377,9 @@ function renderShell() {
         <button class="nav-item" data-page="files">${ico('folder')}<span>文件</span></button>
         <button class="nav-item" data-page="terminal">${ico('terminal')}<span>终端</span></button>
         <button class="nav-item" data-page="ai">${ico('spark')}<span>AI 助手</span></button>
+        <div class="nav-group">趣味</div>
+        <button class="nav-item" data-page="stocks">${ico('stocks')}<span>行情</span></button>
+        <button class="nav-item" data-page="park">${ico('park')}<span>服务器乐园</span></button>
         <div class="nav-group">系统</div>
         <button class="nav-item" data-page="settings">${ico('settings')}<span>设置</span></button>
       </nav>
@@ -331,6 +395,8 @@ function renderShell() {
         <div class="top-right">
           ${hasWindowHost() ? `<button class="icon-btn" id="widgetBtn" title="悬浮挂件">${ico('widget')}</button>` : ''}
           <button class="icon-btn" id="wallBtn" title="监控大屏">${ico('wall')}</button>
+          <button class="icon-btn" id="paletteBtn" title="命令面板 (Ctrl+K)">${ico('command')}</button>
+          <button class="icon-btn" id="topTheme" title="${state.theme === 'dark' ? '切换浅色模式' : '切换深色模式'}">${ico(state.theme === 'dark' ? 'sun' : 'moon')}</button>
           <button class="icon-btn" id="topRefresh" title="刷新当前页">${ico('refresh')}</button>
           ${state.desktop ? '' : `<button class="icon-btn" id="logoutBtn" title="退出登录">${ico('logout')}</button>`}
           ${winControlsHTML()}
@@ -362,6 +428,8 @@ function renderShell() {
   });
   $('#topRefresh').addEventListener('click', refreshCurrentPage);
   $('#wallBtn').addEventListener('click', () => navigate('wall'));
+  $('#paletteBtn').addEventListener('click', openPalette);
+  $('#topTheme').addEventListener('click', toggleTheme);
   if ($('#widgetBtn')) $('#widgetBtn').addEventListener('click', enterWidgetMode);
   if ($('#logoutBtn')) {
     $('#logoutBtn').addEventListener('click', async () => {
@@ -429,6 +497,8 @@ function refreshCurrentPage() {
     case 'topology': loadTopology(true); break;
     case 'personality': loadPersonality(true); break;
     case 'timeline': loadTimeline(true); break;
+    case 'stocks': loadStocks(); break;
+    case 'park': loadPark(); break;
     case 'containers': loadContainers(); break;
     case 'apps': loadStacks(); break;
     case 'files': loadFiles(state.filePath); break;
@@ -489,9 +559,10 @@ function updateNodePills() {
 }
 
 function navigate(page) {
-  if (page !== 'wall' && page !== 'widget' && !TOP_PAGES.includes(page)) page = 'overview';
+  if (page !== 'wall' && page !== 'widget' && page !== 'ambient' && !TOP_PAGES.includes(page)) page = 'overview';
   state.subview = null;
   state.page = page;
+  if (TOP_PAGES.includes(page)) recordVisit(page);
   const hash = '#/' + page;
   if (location.hash !== hash) {
     location.hash = hash;
@@ -502,7 +573,7 @@ function navigate(page) {
 
 function onRoute() {
   const p = (location.hash.replace(/^#\/?/, '') || 'overview');
-  if (p === 'wall' || p === 'widget') {
+  if (p === 'wall' || p === 'widget' || p === 'ambient') {
     state.page = p;
     state.subview = null;
     renderPage();
@@ -510,6 +581,7 @@ function onRoute() {
   }
   state.page = TOP_PAGES.includes(p) ? p : 'overview';
   state.subview = null;
+  recordVisit(state.page);
   renderPage();
 }
 
@@ -543,6 +615,10 @@ function selectNode(id) {
 function cleanupPage() {
   if (state.pageTimer) { clearInterval(state.pageTimer); state.pageTimer = null; }
   if (state.procTimer) { clearInterval(state.procTimer); state.procTimer = null; }
+  if (state.stockTimer) { clearInterval(state.stockTimer); state.stockTimer = null; }
+  if (state.parkTimer) { clearInterval(state.parkTimer); state.parkTimer = null; }
+  if (state.ambientRAF) { cancelAnimationFrame(state.ambientRAF); state.ambientRAF = null; }
+  if (state.ambientResize) { window.removeEventListener('resize', state.ambientResize); state.ambientResize = null; }
   if (state.wallTimer) { clearInterval(state.wallTimer); state.wallTimer = null; }
   if (state.wallClock) { clearInterval(state.wallClock); state.wallClock = null; }
   if (state.wallKey) { document.removeEventListener('keydown', state.wallKey); state.wallKey = null; }
@@ -553,9 +629,13 @@ function cleanupPage() {
   if (state.tlPlay.cache) state.tlPlay.cache = null;
   const wall = $('#wallRoot');
   if (wall) wall.remove();
+  const ambient = $('#ambientRoot');
+  if (ambient) ambient.remove();
   const widget = $('#widgetRoot');
   if (widget) widget.remove();
+  closePalette();
   document.body.classList.remove('wall-mode');
+  document.body.classList.remove('ambient-mode');
   document.body.classList.remove('widget-mode');
   closeLogDrawer();
   disposeTerminal();
@@ -564,6 +644,7 @@ function cleanupPage() {
 function renderPage() {
   cleanupPage();
   if (state.page === 'wall') return renderWall();
+  if (state.page === 'ambient') return renderAmbient();
   if (state.page === 'widget') return renderWidget();
   const selNode = currentNode();
   if (selNode && selNode.sftp_only && ['containers', 'apps', 'terminal'].includes(state.page)) {
@@ -584,6 +665,8 @@ function renderPage() {
     case 'topology': return renderTopology();
     case 'personality': return renderPersonality();
     case 'timeline': return renderTimeline();
+    case 'stocks': return renderStocks();
+    case 'park': return renderPark();
     case 'containers': return renderContainers();
     case 'apps': return renderApps();
     case 'files': return renderFiles();
@@ -710,6 +793,7 @@ function renderWall() {
     <header class="wall-head">
       <div class="wall-brand"><img src="/assets/logo.svg" alt=""><span>KayPanel 监控大屏</span><span class="wall-live"><i></i>LIVE</span></div>
       <div class="wall-clock"><b id="wallTime">${v.time}</b><span id="wallDate">${v.date}</span></div>
+      <button class="wall-exit" id="wallAmbient" title="切换到氛围屏">${ico('ambient')}<span>氛围屏</span></button>
       <button class="wall-exit" id="wallFull" title="切换全屏">${ico('expand')}<span>全屏</span></button>
       <button class="wall-exit" id="wallExit" title="退出大屏">退出 Esc</button>
     </header>
@@ -718,8 +802,10 @@ function renderWall() {
   document.body.appendChild(root);
   drawWall();
   updateWallClock();
+  bumpStat('kp_screens');
   const exit = () => navigate('overview');
   $('#wallExit').addEventListener('click', exit);
+  $('#wallAmbient').addEventListener('click', () => navigate('ambient'));
   $('#wallFull').addEventListener('click', () => {
     if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
     else document.documentElement.requestFullscreen().catch(() => {});
@@ -752,6 +838,7 @@ async function loadOverview(render = true) {
     if (data.version) state.version = data.version;
     ensureSelected();
     updateNodePills();
+    syncTray();
     if (render && state.page === 'overview' && !state.subview) {
       drawOverview();
       if (Date.now() - state.auditAt > 20000) loadRailOps();
@@ -774,6 +861,7 @@ async function refreshNodesLight() {
     state.nodes = list;
     ensureSelected();
     updateNodePills();
+    syncTray();
   } catch (e) { /* keep current view */ }
 }
 
@@ -2205,6 +2293,8 @@ async function sendAI(text) {
   if (!q) return;
   const n = currentNode();
   if (!n) { toast('请先选择节点', 'error'); return; }
+  bumpStat('kp_ai_msgs');
+  checkAchievements();
   state.aiMessages.push({ role: 'user', content: q });
   state.aiBusy = true;
   renderAIChat();
@@ -2309,6 +2399,8 @@ async function loadInspect() {
   try {
     state.inspect = await api('/api/inspect');
     state.inspectError = '';
+    bumpStat('kp_inspected');
+    checkAchievements();
   } catch (e) {
     state.inspectError = e.message;
     toast(e.message, 'error');
@@ -3099,6 +3191,916 @@ function renderWidget() {
   state.widgetTimer = setInterval(() => {
     if (state.page === 'widget') refreshWidget();
   }, 3000);
+}
+
+/* ---------- fun: shared stats ---------- */
+
+function lsJSON(key, fallback) {
+  try {
+    const v = JSON.parse(localStorage.getItem(key));
+    return v == null ? fallback : v;
+  } catch (e) { return fallback; }
+}
+
+function lsSave(key, value) {
+  try { localStorage.setItem(key, JSON.stringify(value)); } catch (e) { /* storage full */ }
+}
+
+function bumpStat(key, n = 1) {
+  const s = lsJSON('kp_stats', {});
+  s[key] = (Number(s[key]) || 0) + n;
+  lsSave('kp_stats', s);
+}
+
+function statCount(key) {
+  return Number((lsJSON('kp_stats', {})[key]) || 0);
+}
+
+function recordVisit(page) {
+  if (!TOP_PAGES.includes(page)) return;
+  const v = lsJSON('kp_visits', {});
+  v[page] = (Number(v[page]) || 0) + 1;
+  lsSave('kp_visits', v);
+}
+
+function visitCount() {
+  return Object.keys(lsJSON('kp_visits', {})).length;
+}
+
+function realNodes() {
+  return state.nodes.filter(n => !n.sftp_only);
+}
+
+function maxUptime() {
+  return realNodes().reduce((a, n) => Math.max(a, Number((n.latest || {}).uptime) || 0), 0);
+}
+
+const ACHIEVEMENTS = [
+  { id: 'first_node', title: '初来乍到', desc: '纳管第一台服务器', icon: 'server', test: () => realNodes().length >= 1 },
+  { id: 'two_nodes', title: '双机互联', desc: '同时纳管 2 台服务器', icon: 'topology', test: () => realNodes().length >= 2 },
+  { id: 'four_nodes', title: '机房管理员', desc: '同时纳管 4 台服务器', icon: 'overview', test: () => realNodes().length >= 4 },
+  { id: 'all_online', title: '全员到齐', desc: '所有节点同时在线（至少 2 台）', icon: 'activity', test: () => { const r = realNodes(); return r.length >= 2 && r.every(n => n.online); } },
+  { id: 'ironman', title: '铁人三项', desc: '任一节点连续运行满 30 天', icon: 'heart', test: () => maxUptime() >= 30 * 86400 },
+  { id: 'hundred_days', title: '百天老店', desc: '任一节点连续运行满 100 天', icon: 'trophy', test: () => maxUptime() >= 100 * 86400 },
+  { id: 'container_king', title: '容器大户', desc: '所有节点合计运行 20 个容器', icon: 'container', test: () => realNodes().reduce((a, n) => a + Math.max(0, Number((n.latest || {}).docker_running) || 0), 0) >= 20 },
+  { id: 'cool_head', title: '冷静如水', desc: '所有在线节点 CPU 低于 30%', icon: 'clock', test: () => { const r = realNodes().filter(n => n.online); return r.length >= 1 && r.every(n => (Number((n.latest || {}).cpu) || 0) < 30); } },
+  { id: 'night_owl', title: '夜猫子', desc: '凌晨 0-5 点打开面板', icon: 'moon', test: () => new Date().getHours() < 5 },
+  { id: 'early_bird', title: '早起鸟', desc: '早上 5-7 点打开面板', icon: 'sun', test: () => { const h = new Date().getHours(); return h >= 5 && h < 7; } },
+  { id: 'theme_knight', title: '深色骑士', desc: '切换到深色主题', icon: 'moon', test: () => state.theme === 'dark' },
+  { id: 'inspect_master', title: '体检达人', desc: '累计完成 3 次一键巡检', icon: 'activity', progress: () => [Math.min(3, statCount('kp_inspected')), 3], test: () => statCount('kp_inspected') >= 3 },
+  { id: 'pet_parent', title: '铲屎官', desc: '投喂服务器宠物 1 次', icon: 'park', test: () => statCount('kp_feeds') >= 1 },
+  { id: 'ai_rookie', title: 'AI 初体验', desc: '向 AI 助手提问一次', icon: 'spark', test: () => statCount('kp_ai_msgs') >= 1 },
+  { id: 'explorer', title: '环游面板', desc: '访问 8 个不同的页面', icon: 'command', progress: () => [Math.min(8, visitCount()), 8], test: () => visitCount() >= 8 },
+  { id: 'screen_lover', title: '大屏爱好者', desc: '打开监控大屏或氛围屏', icon: 'wall', test: () => statCount('kp_screens') >= 1 },
+];
+
+function checkAchievements(quiet) {
+  const got = lsJSON('kp_ach', {});
+  const fresh = [];
+  for (const a of ACHIEVEMENTS) {
+    if (!got[a.id]) {
+      let ok = false;
+      try { ok = !!a.test(); } catch (e) { ok = false; }
+      if (ok) { got[a.id] = Date.now(); fresh.push(a); }
+    }
+  }
+  if (fresh.length) {
+    lsSave('kp_ach', got);
+    if (!quiet) fresh.slice(0, 2).forEach((a, i) => setTimeout(() => toast(`成就解锁 · ${a.title}`, 'success', 3000), i * 420));
+  }
+  return fresh;
+}
+
+function achUnlocked() {
+  return lsJSON('kp_ach', {});
+}
+
+/* ---------- stocks ---------- */
+
+function stockCode(n, i) {
+  const clean = s => String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  const name = clean(n.name);
+  const id = clean(n.id);
+  const base = name.length >= 2 ? name : id;
+  return base.length >= 2 ? base.slice(0, 6) : 'KP' + String(i + 1).padStart(2, '0');
+}
+
+function stockPriceOf(s) {
+  const cpu = Math.max(0, Math.min(100, Number(s.cpu) || 0));
+  const mem = pct(s.mem_used, s.mem_total);
+  const disk = pct(s.disk_used, s.disk_total);
+  const temp = Math.max(0, Number(s.temp) || 0);
+  let health = 100 - (cpu * 0.5 + mem * 0.3 + disk * 0.2);
+  if (temp > 70) health -= (temp - 70) * 0.3;
+  return 24 + Math.max(0, health) * 1.08;
+}
+
+function stockOHLC(prices, buckets) {
+  if (prices.length < 2) return [];
+  const n = Math.min(buckets, prices.length);
+  const size = prices.length / n;
+  const out = [];
+  for (let i = 0; i < n; i++) {
+    const chunk = prices.slice(Math.floor(i * size), Math.max(Math.floor(i * size) + 1, Math.floor((i + 1) * size)));
+    if (!chunk.length) continue;
+    out.push({
+      o: chunk[0], c: chunk[chunk.length - 1],
+      h: Math.max(...chunk), l: Math.min(...chunk),
+    });
+  }
+  return out;
+}
+
+function stockQuote(n, i) {
+  const hist = (n.history || []).filter(s => s && typeof s.cpu === 'number');
+  const prices = hist.map(stockPriceOf);
+  const last = prices.length ? prices[prices.length - 1] : stockPriceOf(n.latest || {});
+  const first = prices.length ? prices[0] : last;
+  const change = first ? ((last - first) / first) * 100 : 0;
+  const high = prices.length ? Math.max(...prices) : last;
+  const low = prices.length ? Math.min(...prices) : last;
+  const volume = hist.reduce((a, s) => a + (Number(s.net_rx) || 0) + (Number(s.net_tx) || 0), 0) * 3;
+  const m = n.latest || {};
+  return {
+    node: n, code: stockCode(n, i), price: last, change, high, low, volume,
+    series: prices, candles: stockOHLC(prices, 16),
+    suspended: !n.online, memTotal: Number(m.mem_total) || 0,
+  };
+}
+
+function stockAreaSVG(values, color, height = 84) {
+  if (!values.length) return `<div class="chart-empty">等待采样数据…</div>`;
+  const w = 600, h = height, pad = 3;
+  const hi = Math.max(...values), lo = Math.min(...values);
+  const range = hi - lo || 1;
+  const step = values.length > 1 ? (w - pad * 2) / (values.length - 1) : 0;
+  const pts = values.map((v, i) => [pad + i * step, h - pad - ((v - lo) / range) * (h - pad * 2)]);
+  const line = smoothPath(pts);
+  const gid = 'kp-stock-' + (++chartSeq);
+  return `<svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">
+    <defs><linearGradient id="${gid}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${color}" stop-opacity=".28"/><stop offset="1" stop-color="${color}" stop-opacity="0"/></linearGradient></defs>
+    <path d="${line} L${pts[pts.length - 1][0].toFixed(1)},${h - pad} L${pts[0][0].toFixed(1)},${h - pad} Z" fill="url(#${gid})"/>
+    <path class="chart-line" d="${line}" stroke="${color}"/>
+  </svg>`;
+}
+
+function stockCandlesSVG(candles) {
+  if (candles.length < 2) return `<div class="chart-empty">数据积累中…</div>`;
+  const w = 400, h = 96, pad = 6, gap = 3;
+  const hi = Math.max(...candles.map(c => c.h)), lo = Math.min(...candles.map(c => c.l));
+  const range = hi - lo || 1;
+  const cw = (w - pad * 2 - gap * (candles.length - 1)) / candles.length;
+  const y = v => pad + (1 - (v - lo) / range) * (h - pad * 2);
+  const bars = candles.map((c, i) => {
+    const x = pad + i * (cw + gap);
+    const up = c.c >= c.o;
+    const color = up ? '#ef4444' : '#16a34a';
+    const top = y(Math.max(c.o, c.c)), bottom = y(Math.min(c.o, c.c));
+    const bh = Math.max(1.6, bottom - top);
+    return `<line x1="${(x + cw / 2).toFixed(1)}" y1="${y(c.h).toFixed(1)}" x2="${(x + cw / 2).toFixed(1)}" y2="${y(c.l).toFixed(1)}" stroke="${color}" stroke-width="1.2"/>
+      <rect x="${x.toFixed(1)}" y="${top.toFixed(1)}" width="${cw.toFixed(1)}" height="${bh.toFixed(1)}" rx="1" fill="${color}"/>`;
+  }).join('');
+  const grids = [0.25, 0.5, 0.75].map(f => `<line class="grid-line" x1="0" y1="${(h * f).toFixed(1)}" x2="${w}" y2="${(h * f).toFixed(1)}"/>`).join('');
+  return `<svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">${grids}${bars}</svg>`;
+}
+
+function stockIndex(quotes) {
+  const len = Math.max(0, ...quotes.map(q => q.series.length));
+  const series = [];
+  for (let off = 0; off < len; off++) {
+    const vals = quotes.map(q => q.series[q.series.length - 1 - off]).filter(v => typeof v === 'number');
+    if (vals.length) series.unshift(vals.reduce((a, b) => a + b, 0) / vals.length * 10);
+  }
+  const last = series.length ? series[series.length - 1] : 1000;
+  const first = series.length ? series[0] : last;
+  return {
+    value: last,
+    change: first ? ((last - first) / first) * 100 : 0,
+    series,
+    up: quotes.filter(q => q.change > 0.15).length,
+    down: quotes.filter(q => q.change < -0.15).length,
+    flat: quotes.filter(q => Math.abs(q.change) <= 0.15).length,
+    cap: quotes.reduce((a, q) => a + q.memTotal, 0),
+  };
+}
+
+function stockQuoteCard(q) {
+  const n = q.node;
+  const up = q.change >= 0;
+  const cls = up ? 'up' : 'down';
+  return `<article class="stock-card ${q.suspended ? 'suspended' : ''}" data-stocknode="${esc(n.id)}" title="点击切换到该节点">
+    <div class="stock-head">
+      <div class="stock-ident">
+        <span class="stock-avatar" style="background:${avatarColor(n.id)}">${esc(initialOf(n.name))}</span>
+        <div><b>${esc(n.name)}</b><span>${esc(q.code)} · ${esc((n.latest || {}).os || (n.online ? '采集中' : '已离线'))}</span></div>
+      </div>
+      ${q.suspended ? '<span class="stock-tag suspended">停牌</span>' : up ? '<span class="stock-tag up">上涨</span>' : '<span class="stock-tag down">下跌</span>'}
+    </div>
+    <div class="stock-quote">
+      <b class="${cls}">${q.price.toFixed(2)}</b>
+      <span class="stock-change ${cls}">${up ? '+' : ''}${q.change.toFixed(2)}%</span>
+    </div>
+    <div class="stock-candles">${stockCandlesSVG(q.candles)}</div>
+    <div class="stock-stats">
+      <div><span>最高</span><b>${q.high.toFixed(2)}</b></div>
+      <div><span>最低</span><b>${q.low.toFixed(2)}</b></div>
+      <div><span>成交额</span><b>${q.volume ? fmtBytes(q.volume) : '—'}</b></div>
+      <div><span>市值</span><b>${q.memTotal ? fmtBytes(q.memTotal) : '—'}</b></div>
+    </div>
+  </article>`;
+}
+
+function drawStocks() {
+  const page = $('#page');
+  if (!page) return;
+  const nodes = realNodes();
+  const quotes = nodes.map(stockQuote);
+  const idx = stockIndex(quotes);
+  const idxUp = idx.change >= 0;
+  if (!nodes.length) {
+    page.innerHTML = `
+      <section class="page-head">
+        <div><h1>服务器行情</h1><p class="page-sub">把每台服务器的健康度当成一支股票 · 红涨绿跌</p></div>
+      </section>
+      ${noNodeHTML('还没有可以上市的服务器')}`;
+    bindNoNode();
+    return;
+  }
+  page.innerHTML = `
+    <section class="page-head">
+      <div><h1>服务器行情</h1><p class="page-sub">健康度指数 · 红涨绿跌 · 每 5 秒刷新</p></div>
+      <div class="head-actions">
+        <button class="btn sm" id="stkAmbient">${ico('ambient', 'ico')}氛围屏</button>
+        <button class="btn sm ghost" id="stkRefresh">刷新行情</button>
+      </div>
+    </section>
+    <div class="stock-board">
+      <div class="stock-index-card">
+        <div class="stock-index-main">
+          <div class="stock-index-label">KP 算力指数 <span class="live-pill sm"><span class="live-dot"></span>交易中</span></div>
+          <div class="stock-index-value ${idxUp ? 'up' : 'down'}">${idx.value.toFixed(1)}</div>
+          <div class="stock-index-change ${idxUp ? 'up' : 'down'}">${idxUp ? '+' : ''}${idx.change.toFixed(2)}% <span>对比本轮 ${idx.series.length} 个采样</span></div>
+        </div>
+        <div class="stock-index-chart">${stockAreaSVG(idx.series, idxUp ? '#ef4444' : '#16a34a', 96)}</div>
+        <div class="stock-index-foot">
+          <div><span>上涨</span><b class="up">${idx.up}</b></div>
+          <div><span>下跌</span><b class="down">${idx.down}</b></div>
+          <div><span>平盘</span><b>${idx.flat}</b></div>
+          <div><span>总市值</span><b>${fmtBytes(idx.cap)}</b></div>
+        </div>
+      </div>
+      <div class="stock-grid">${quotes.map(stockQuoteCard).join('')}</div>
+      <p class="stock-note">指数 = 各节点「健康度」均价：CPU 50% + 内存 30% + 磁盘 20%，温度超过 70°C 额外扣分；仅统计物理机与云主机节点。</p>
+    </div>`;
+  $('#stkRefresh').addEventListener('click', loadStocks);
+  $('#stkAmbient').addEventListener('click', () => navigate('ambient'));
+  $$('.stock-card[data-stocknode]', page).forEach(card => card.addEventListener('click', () => {
+    selectNode(card.dataset.stocknode);
+    navigate('overview');
+  }));
+}
+
+async function loadStocks() {
+  try {
+    const data = await api('/api/overview');
+    state.nodes = data.nodes || [];
+    state.settings = data.settings || state.settings;
+    if (data.version) state.version = data.version;
+    ensureSelected();
+    updateNodePills();
+    syncTray();
+    drawStocks();
+  } catch (e) {
+    toast(e.message, 'error');
+  }
+}
+
+function renderStocks() {
+  drawStocks();
+  loadStocks();
+  if (state.pageTimer) clearInterval(state.pageTimer);
+  state.pageTimer = setInterval(() => {
+    if (state.page === 'stocks' && !state.subview) loadStocks();
+  }, 5000);
+}
+
+/* ---------- server park: pets, weather, achievements ---------- */
+
+const PET_SPECIES = [
+  { id: 'slime', label: '史莱姆', pet: '布丁' },
+  { id: 'cat', label: '猫猫', pet: '喵喵' },
+  { id: 'robot', label: '机娘', pet: '小铁' },
+  { id: 'ghost', label: '小幽灵', pet: '小幽' },
+  { id: 'duck', label: '鸭鸭', pet: '鸭鸭' },
+];
+
+function hashSeed(s) {
+  let h = 2166136261;
+  for (const ch of String(s)) { h ^= ch.charCodeAt(0); h = Math.imul(h, 16777619); }
+  return h >>> 0;
+}
+
+function petStore() {
+  return lsJSON('kp_pets', {});
+}
+
+function petState(n) {
+  const all = petStore();
+  if (!all[n.id]) {
+    all[n.id] = { xp: 0, feeds: 0, lastFeed: 0, name: '' };
+    lsSave('kp_pets', all);
+  }
+  return all[n.id];
+}
+
+function petMoodInfo(n) {
+  const m = n.latest || {};
+  const cpu = Number(m.cpu) || 0;
+  const mem = pct(m.mem_used, m.mem_total);
+  const temp = Number(m.temp) || 0;
+  if (!n.online) return { mood: 'sleep', label: '熟睡', word: '服务器离线，宠物钻进被窝了。' };
+  if (cpu >= 85 || mem >= 92 || temp >= 78) return { mood: 'panic', label: '紧张', word: '有点喘不过气，快看看进程吧。' };
+  if (cpu >= 55 || mem >= 75) return { mood: 'busy', label: '忙碌', word: '正在努力干活，别打扰它。' };
+  return { mood: 'happy', label: '开心', word: '状态很好，想和你贴贴。' };
+}
+
+function petSVG(kind, mood, color) {
+  const dark = 'rgba(15,23,42,.82)';
+  const eyeY = kind === 'duck' ? 50 : 56;
+  let body;
+  if (kind === 'cat') {
+    body = `<path d="M31 53c0-16 13-27 29-27s29 11 29 27c0 17-13 30-29 30S31 70 31 53Z" fill="${color}"/>
+      <path d="M35 42 29 19l21 12Z" fill="${color}"/><path d="M85 42 91 19 70 31Z" fill="${color}"/>
+      <path d="M38 35l-3-7 7 3Z" fill="rgba(255,255,255,.3)"/><path d="M82 35l3-7-7 3Z" fill="rgba(255,255,255,.3)"/>
+      <ellipse cx="60" cy="71" rx="17" ry="12" fill="rgba(255,255,255,.22)"/>
+      <g stroke="rgba(255,255,255,.55)" stroke-width="1.4" stroke-linecap="round"><path d="M25 60h8M25 66h7M95 60h-8M95 66h-7"/></g>`;
+  } else if (kind === 'robot') {
+    body = `<rect x="30" y="34" width="60" height="58" rx="18" fill="${color}"/>
+      <rect x="36" y="41" width="48" height="45" rx="13" fill="rgba(255,255,255,.1)"/>
+      <rect x="56" y="16" width="8" height="16" rx="3" fill="${color}"/><circle cx="60" cy="13" r="5" fill="${color}"/>
+      <circle cx="33" cy="62" r="3.5" fill="rgba(255,255,255,.35)"/><circle cx="87" cy="62" r="3.5" fill="rgba(255,255,255,.35)"/>`;
+  } else if (kind === 'ghost') {
+    body = `<path d="M27 62c0-18 15-31 33-31s33 13 33 31v28c-5 5-10 5-15 0-5 5-10 5-15 0-5 5-10 5-15 0-5 5-10 5-15 0V62Z" fill="${color}" opacity=".94"/>
+      <ellipse cx="60" cy="44" rx="18" ry="10" fill="rgba(255,255,255,.16)"/>`;
+  } else if (kind === 'duck') {
+    body = `<ellipse cx="60" cy="66" rx="32" ry="27" fill="${color}"/>
+      <ellipse cx="60" cy="76" rx="18" ry="12" fill="rgba(255,255,255,.2)"/>
+      <path d="M55 35c0-7 4-9 5-14 2 6 6 7 5 14Z" fill="${color}"/>
+      <ellipse cx="60" cy="${eyeY + 13}" rx="7.5" ry="5" fill="#f59e0b"/>`;
+  } else {
+    body = `<ellipse cx="60" cy="64" rx="33" ry="29" fill="${color}"/>
+      <ellipse cx="60" cy="74" rx="19" ry="13" fill="rgba(255,255,255,.22)"/>
+      <ellipse cx="40" cy="44" rx="7" ry="4" fill="rgba(255,255,255,.25)" transform="rotate(-24 40 44)"/>`;
+  }
+  let face = '';
+  if (mood === 'happy') {
+    face = `<path d="M${47} ${eyeY}q4-5 8 0" stroke="${dark}" stroke-width="2.4" fill="none" stroke-linecap="round"/>
+      <path d="M${65} ${eyeY}q4-5 8 0" stroke="${dark}" stroke-width="2.4" fill="none" stroke-linecap="round"/>
+      <path d="M53 ${eyeY + 12}q7 6 14 0" stroke="${dark}" stroke-width="2.4" fill="none" stroke-linecap="round"/>`;
+  } else if (mood === 'busy') {
+    face = `<circle cx="51" cy="${eyeY}" r="3.6" fill="${dark}"/><circle cx="69" cy="${eyeY}" r="3.6" fill="${dark}"/>
+      <path d="M54 ${eyeY + 13}h12" stroke="${dark}" stroke-width="2.4" stroke-linecap="round"/>
+      <path d="M88 40c3 5 3 9 0 12-3-3-3-7 0-12Z" fill="#38bdf8"/>`;
+  } else if (mood === 'panic') {
+    face = `<path d="m47 ${eyeY - 3} 7 7M54 ${eyeY - 3}l-7 7M66 ${eyeY - 3}l7 7M73 ${eyeY - 3}l-7 7" stroke="${dark}" stroke-width="2.2" stroke-linecap="round"/>
+      <ellipse cx="60" cy="${eyeY + 14}" rx="5" ry="4" fill="${dark}"/>
+      <path d="M46 ${eyeY - 10}l7 3M74 ${eyeY - 10}l-7 3" stroke="${dark}" stroke-width="2" stroke-linecap="round"/>`;
+  } else {
+    face = `<path d="M47 ${eyeY}q4 4 8 0" stroke="${dark}" stroke-width="2.4" fill="none" stroke-linecap="round"/>
+      <path d="M65 ${eyeY}q4 4 8 0" stroke="${dark}" stroke-width="2.4" fill="none" stroke-linecap="round"/>
+      <path d="M55 ${eyeY + 12}h10" stroke="${dark}" stroke-width="2.2" stroke-linecap="round"/>
+      <text x="86" y="34" font-size="13" font-weight="700" fill="rgba(148,163,184,.9)">z</text>
+      <text x="93" y="26" font-size="9" font-weight="700" fill="rgba(148,163,184,.7)">z</text>`;
+  }
+  return `<svg class="pet-svg" viewBox="0 0 120 112" aria-hidden="true"><g class="pet-bob">${body}${face}</g></svg>`;
+}
+
+function petCard(n) {
+  const p = petState(n);
+  const sp = PET_SPECIES[hashSeed(n.id) % PET_SPECIES.length];
+  const m = petMoodInfo(n);
+  const level = 1 + Math.floor(Math.sqrt(p.xp / 10));
+  const prevXp = 10 * (level - 1) * (level - 1);
+  const nextXp = 10 * level * level;
+  const intimacy = Math.min(100, Math.round((p.xp - prevXp) / Math.max(1, nextXp - prevXp) * 100));
+  const hunger = p.lastFeed ? Math.max(0, Math.min(100, 100 - (Date.now() - p.lastFeed) / 3600000 * 3)) : 65;
+  const lm = n.latest || {};
+  const happy = n.online ? Math.max(8, Math.min(100, Math.round(100 - (Number(lm.cpu) || 0) * 0.55 - Math.max(0, pct(lm.mem_used, lm.mem_total) - 60) * 0.7 - Math.max(0, (Number(lm.temp) || 0) - 70) * 1.5))) : 32;
+  const name = p.name || sp.pet || sp.label;
+  return `<div class="pet-card ${n.online ? '' : 'offline'}">
+    <div class="pet-head">
+      <span class="avatar" style="background:${avatarColor(n.id)}">${esc(initialOf(n.name))}</span>
+      <div class="pet-node"><b>${esc(n.name)}</b><span>${esc(n.user)}@${esc(n.addr)}</span></div>
+      <span class="pet-lv">Lv.${level}</span>
+    </div>
+    <div class="pet-stage mood-${m.mood}" style="background:radial-gradient(circle at 50% 68%, ${avatarColor(n.id)}1f, transparent 62%)">${petSVG(sp.id, m.mood, avatarColor(n.id))}</div>
+    <div class="pet-name"><b>${esc(name)}</b><span>${sp.label} · ${m.label}</span></div>
+    <div class="pet-say">${esc(m.word)}</div>
+    <div class="pet-bars">
+      <div class="pet-bar"><span>心情</span><i><b style="width:${happy}%;background:linear-gradient(90deg,#f472b6,#fb7185)"></b></i><em>${happy}</em></div>
+      <div class="pet-bar"><span>饱食</span><i><b style="width:${hunger.toFixed(0)}%;background:linear-gradient(90deg,#fbbf24,#f59e0b)"></b></i><em>${hunger.toFixed(0)}</em></div>
+      <div class="pet-bar"><span>亲密</span><i><b style="width:${intimacy}%;background:linear-gradient(90deg,#60a5fa,#2563eb)"></b></i><em>${intimacy}</em></div>
+    </div>
+    <div class="pet-actions">
+      <button class="btn sm primary" data-feed="${esc(n.id)}">投喂 +8</button>
+      <button class="btn sm ghost" data-rename="${esc(n.id)}">改名</button>
+      <span class="pet-fed">${p.feeds ? `已投喂 ${p.feeds} 次` : '今日份口粮已备好'}</span>
+    </div>
+  </div>`;
+}
+
+const WX_TYPES = {
+  sunny: { label: '晴朗', advice: '算力天气稳定，适合跑批、更新与备份。' },
+  partly: { label: '多云', advice: '负载略有波动，日常作业不受影响。' },
+  cloudy: { label: '阴天', advice: '资源占用偏高，建议留意大进程。' },
+  overcast: { label: '闷热', advice: '内存水位偏高，注意容器与缓存。' },
+  rain: { label: '雷阵雨', advice: '资源吃紧，可能出现卡顿或超时。' },
+  storm: { label: '暴风雪', advice: '负载过高，建议立即排查占用进程。' },
+  night: { label: '断网极夜', advice: '节点离线，天气数据缺失。' },
+};
+
+function wxIcon(type) {
+  const sun = `<circle cx="32" cy="30" r="11" fill="#fbbf24"/><g stroke="#f8b21a" stroke-width="2.6" stroke-linecap="round"><path d="M32 9v5M32 46v5M9 30h5M50 30h5M14 12l3.5 3.5M46.5 44.5 50 48M14 48l3.5-3.5M46.5 15.5 50 12"/></g>`;
+  const cloud = (fill, x, y, sc) => `<g transform="translate(${x} ${y}) scale(${sc})"><path d="M18 48h30a10 10 0 0 0 1-20 14 14 0 0 0-26-3 9 9 0 0 0-5 23Z" fill="${fill}"/></g>`;
+  const rain = `<g stroke="#38bdf8" stroke-width="2.6" stroke-linecap="round"><path d="M26 52l-3 8M36 52l-3 8M46 52l-3 8"/></g>`;
+  const bolt = `<path d="M34 50 28 60h6l-4 8 12-10h-6l4-8Z" fill="#fbbf24"/>`;
+  const stars = `<g fill="#cbd5e1"><circle cx="16" cy="18" r="1.6"/><circle cx="24" cy="10" r="1.2"/><circle cx="50" cy="44" r="1.4"/></g>`;
+  let inner;
+  if (type === 'sunny') inner = sun;
+  else if (type === 'partly') inner = `<g transform="translate(10 -8) scale(.78)">${sun}</g>${cloud('#cbd5e1', 4, 14, .9)}`;
+  else if (type === 'cloudy') inner = `${cloud('#cbd5e1', 2, 4, .92)}${cloud('#94a3b8', 16, 16, .68)}`;
+  else if (type === 'overcast') inner = cloud('#94a3b8', 2, 8, 1);
+  else if (type === 'rain') inner = `${cloud('#b6c2d1', 0, 2, 1)}${rain}`;
+  else if (type === 'storm') inner = `${cloud('#7d8ba0', 0, 2, 1)}${bolt}`;
+  else inner = `<path d="M40 10a18 18 0 1 0 14 26 15 15 0 0 1-14-26Z" fill="#94a3b8"/>${stars}`;
+  return `<svg viewBox="0 0 64 64" aria-hidden="true">${inner}</svg>`;
+}
+
+function weatherOf(n) {
+  const hist = (n.history || []).filter(s => s && typeof s.cpu === 'number');
+  const recent = hist.slice(-40);
+  const cpus = recent.map(s => Number(s.cpu) || 0);
+  const m = n.latest || {};
+  const cpu = cpus.length ? cpus[cpus.length - 1] : 0;
+  const avg = cpus.length ? cpus.reduce((a, b) => a + b, 0) / cpus.length : 0;
+  const mem = pct(m.mem_used, m.mem_total);
+  const disk = pct(m.disk_used, m.disk_total);
+  const hours = recent.length > 1 ? ((recent[recent.length - 1].time - recent[0].time) / 3600) : 0;
+  const slope = hours > 0.005 ? (cpu - cpus[0]) / hours : 0;
+  const proj = h => Math.max(0, Math.min(100, cpu + slope * h * 0.4));
+  const typeOf = c => c < 30 ? 'sunny' : c < 55 ? 'partly' : c < 72 ? 'cloudy' : c < 88 ? 'rain' : 'storm';
+  let type = n.online ? typeOf(cpu) : 'night';
+  if (n.online && mem >= 84 && (type === 'cloudy' || type === 'partly')) type = 'overcast';
+  const temp = Number(m.temp) > 0 ? Number(m.temp) : 36 + cpu * 0.5;
+  const net = (Number(m.net_rx) || 0) + (Number(m.net_tx) || 0);
+  const precip = n.online ? Math.max(4, Math.min(96, Math.round(6 + Math.max(0, avg - 25) * 1.4 + Math.max(0, slope) * 6))) : 0;
+  const forecast = [0, 1, 3, 6].map(h => {
+    const t = n.online ? typeOf(proj(h)) : 'night';
+    return { label: h === 0 ? '现在' : `+${h}h`, type: t };
+  });
+  const advice = WX_TYPES[type].advice + (n.online && disk >= 85 ? ' 另外磁盘余量偏低，建议清理空间。' : '');
+  return { type, temp, mem, disk, net, precip, forecast, advice, avg };
+}
+
+function weatherCard(n) {
+  const w = weatherOf(n);
+  const t = WX_TYPES[w.type];
+  return `<div class="wx-card wx-${w.type}">
+    <div class="wx-head">
+      <span class="avatar" style="background:${avatarColor(n.id)}">${esc(initialOf(n.name))}</span>
+      <div class="wx-node"><b>${esc(n.name)}</b><span>${esc((n.latest || {}).os || (n.online ? '采集中' : '离线'))}</span></div>
+      <span class="wx-tag ${n.online ? '' : 'off'}">${t.label}</span>
+    </div>
+    <div class="wx-main">
+      <div class="wx-icon">${wxIcon(w.type)}</div>
+      <div class="wx-temp"><b>${w.temp.toFixed(0)}</b><span>°C</span><em>${t.label}</em></div>
+    </div>
+    <div class="wx-detail">
+      <div><span>内存湿度</span><b>${n.online ? w.mem.toFixed(0) + '%' : '—'}</b></div>
+      <div><span>网络风速</span><b>${n.online ? fmtRate(w.net) : '—'}</b></div>
+      <div><span>降水概率</span><b>${n.online ? w.precip + '%' : '—'}</b></div>
+      <div><span>磁盘余量</span><b>${n.online ? (100 - w.disk).toFixed(0) + '%' : '—'}</b></div>
+    </div>
+    <div class="wx-forecast">
+      ${w.forecast.map(f => `<div><span>${f.label}</span>${wxIcon(f.type)}<em>${WX_TYPES[f.type].label}</em></div>`).join('')}
+    </div>
+    <div class="wx-advice">${esc(w.advice)}</div>
+  </div>`;
+}
+
+function achievementCard(a) {
+  const got = achUnlocked();
+  const at = got[a.id];
+  let prog = null;
+  if (a.progress) {
+    try { prog = a.progress(); } catch (e) { prog = null; }
+  }
+  return `<div class="ach-card ${at ? 'on' : 'off'}">
+    <div class="ach-medal">${ico(a.icon)}</div>
+    <div class="ach-body">
+      <b>${esc(a.title)}</b>
+      <p>${esc(a.desc)}</p>
+      ${prog && !at ? `<div class="ach-bar"><i><b style="width:${Math.round(prog[0] / prog[1] * 100)}%"></b></i><span>${prog[0]}/${prog[1]}</span></div>` : ''}
+      <span class="ach-state">${at ? '解锁于 ' + new Date(at).toLocaleDateString('zh-CN') : '尚未解锁'}</span>
+    </div>
+  </div>`;
+}
+
+function parkTabsHTML() {
+  const ach = Object.keys(achUnlocked()).length;
+  const tab = state.parkTab;
+  return `<div class="park-tabs" id="parkTabs">
+    <button data-parktab="pets" class="${tab === 'pets' ? 'active' : ''}">${ico('park')}服务器宠物</button>
+    <button data-parktab="weather" class="${tab === 'weather' ? 'active' : ''}">${ico('sun')}资源天气</button>
+    <button data-parktab="ach" class="${tab === 'ach' ? 'active' : ''}">${ico('trophy')}成就徽章 <em>${ach}/${ACHIEVEMENTS.length}</em></button>
+  </div>`;
+}
+
+function parkCounter() {
+  const ach = Object.keys(achUnlocked()).length;
+  const top = $('.park-counter');
+  if (top) top.innerHTML = `${ico('trophy')}${ach}/${ACHIEVEMENTS.length}`;
+  const tab = $('#parkTabs [data-parktab=ach] em');
+  if (tab) tab.textContent = `${ach}/${ACHIEVEMENTS.length}`;
+}
+
+function drawPark() {
+  const host = $('#parkBody');
+  if (!host) return;
+  checkAchievements();
+  parkCounter();
+  const nodes = realNodes();
+  if (state.parkTab === 'weather') {
+    host.innerHTML = nodes.length
+      ? `<div class="wx-grid">${nodes.map(weatherCard).join('')}</div><p class="stock-note">天气预报基于最近 2 分钟的 CPU 采样外推，仅供娱乐；温度优先读取 CPU 传感器。</p>`
+      : noNodeHTML('还没有可以观测天气的服务器');
+  } else if (state.parkTab === 'ach') {
+    const got = Object.keys(achUnlocked()).length;
+    host.innerHTML = `<div class="ach-summary">
+        <div class="ach-count"><b>${got}</b><span>/ ${ACHIEVEMENTS.length} 已解锁</span></div>
+        <div class="ach-progress"><i><b style="width:${Math.round(got / ACHIEVEMENTS.length * 100)}%"></b></i></div>
+        <p>成就随使用自动解锁，保存在本机浏览器中。多逛逛、多投喂，徽章墙就会亮起来。</p>
+      </div>
+      <div class="ach-grid">${ACHIEVEMENTS.map(achievementCard).join('')}</div>`;
+  } else {
+    host.innerHTML = nodes.length
+      ? `<div class="pet-grid">${nodes.map(petCard).join('')}</div><p class="stock-note">宠物由节点指纹孵化，心情随实时负载变化；投喂和改名只保存在本机，不会改动服务器。</p>`
+      : noNodeHTML('还没有可以养宠物的服务器');
+    bindNoNode();
+    $$('[data-feed]', host).forEach(btn => btn.addEventListener('click', () => feedPet(btn.dataset.feed)));
+    $$('[data-rename]', host).forEach(btn => btn.addEventListener('click', () => renamePet(btn.dataset.rename)));
+  }
+}
+
+function feedPet(id) {
+  const all = petStore();
+  const p = all[id] || { xp: 0, feeds: 0, lastFeed: 0, name: '' };
+  p.xp = (Number(p.xp) || 0) + 8;
+  p.feeds = (Number(p.feeds) || 0) + 1;
+  p.lastFeed = Date.now();
+  all[id] = p;
+  lsSave('kp_pets', all);
+  bumpStat('kp_feeds');
+  toast('投喂成功 · 亲密度 +8', 'success', 1800);
+  drawPark();
+  checkAchievements();
+}
+
+async function renamePet(id) {
+  const all = petStore();
+  const p = all[id] || { xp: 0, feeds: 0, lastFeed: 0, name: '' };
+  const name = await promptDialog('给宠物改名', '取一个不超过 12 个字的名字', p.name || '');
+  if (!name) return;
+  p.name = name.slice(0, 12);
+  all[id] = p;
+  lsSave('kp_pets', all);
+  drawPark();
+}
+
+async function loadPark() {
+  try {
+    const data = await api('/api/overview');
+    state.nodes = data.nodes || [];
+    state.settings = data.settings || state.settings;
+    ensureSelected();
+    updateNodePills();
+    syncTray();
+    drawPark();
+  } catch (e) {
+    toast(e.message, 'error');
+  }
+}
+
+function renderPark() {
+  const page = $('#page');
+  const ach = Object.keys(achUnlocked()).length;
+  page.innerHTML = `
+    <section class="page-head">
+      <div><h1>服务器乐园</h1><p class="page-sub">养一只服务器宠物 · 看资源天气 · 收集成就徽章</p></div>
+      <div class="head-actions">
+        <span class="park-counter">${ico('trophy')}${ach}/${ACHIEVEMENTS.length}</span>
+        <button class="btn sm ghost" id="parkRefresh">刷新</button>
+      </div>
+    </section>
+    ${parkTabsHTML()}
+    <div id="parkBody"></div>`;
+  drawPark();
+  $('#parkRefresh').addEventListener('click', loadPark);
+  $('#parkTabs').addEventListener('click', e => {
+    const btn = e.target.closest('[data-parktab]');
+    if (!btn || btn.dataset.parktab === state.parkTab) return;
+    state.parkTab = btn.dataset.parktab;
+    localStorage.setItem('kp_park_tab', state.parkTab);
+    $$('#parkTabs button').forEach(b => b.classList.toggle('active', b.dataset.parktab === state.parkTab));
+    drawPark();
+  });
+  if (state.pageTimer) clearInterval(state.pageTimer);
+  state.pageTimer = setInterval(() => {
+    if (state.page === 'park' && !state.subview) loadPark();
+  }, 12000);
+}
+
+/* ---------- ambient screen ---------- */
+
+function ambientStats() {
+  const nodes = realNodes();
+  const online = nodes.filter(n => n.online);
+  const avg = online.length ? online.reduce((a, n) => a + (Number((n.latest || {}).cpu) || 0), 0) / online.length : 0;
+  return { nodes, online, avg };
+}
+
+function ambientNodesHTML() {
+  const nodes = realNodes();
+  if (!nodes.length) return `<div class="ambient-empty">尚未添加节点</div>`;
+  return nodes.map(n => {
+    const m = n.latest || {};
+    const cpu = n.online ? Number(m.cpu) || 0 : 0;
+    const mem = pct(m.mem_used, m.mem_total);
+    return `<div class="ambient-node ${n.online ? '' : 'off'}">
+      <span class="dot ${nodeDotClass(n)}"></span>
+      <div class="ambient-node-main"><b>${esc(n.name)}</b><span>${n.online ? `${cpu.toFixed(0)}% CPU · ${mem.toFixed(0)}% 内存` : '离线'}</span></div>
+      <div class="ambient-bars"><i><b style="width:${Math.min(100, cpu)}%"></b></i><i><b style="width:${mem}%"></b></i></div>
+    </div>`;
+  }).join('');
+}
+
+function renderAmbient() {
+  document.body.classList.add('ambient-mode');
+  const root = document.createElement('div');
+  root.id = 'ambientRoot';
+  root.className = 'ambient';
+  root.innerHTML = `
+    <canvas id="ambientCanvas"></canvas>
+    <div class="ambient-ui">
+      <header class="ambient-head">
+        <div class="ambient-brand">${ico('ambient')}<span>KayPanel 氛围屏</span></div>
+        <div class="ambient-actions">
+          <button class="wall-exit" id="ambFull">${ico('expand')}<span>全屏</span></button>
+          <button class="wall-exit" id="ambExit">退出 Esc</button>
+        </div>
+      </header>
+      <main class="ambient-center">
+        <div class="ambient-clock" id="ambClock">--:--</div>
+        <div class="ambient-date" id="ambDate"></div>
+        <div class="ambient-line" id="ambLine"></div>
+      </main>
+      <footer class="ambient-nodes" id="ambNodes">${ambientNodesHTML()}</footer>
+    </div>`;
+  document.body.appendChild(root);
+  bumpStat('kp_screens');
+  const exit = () => navigate('overview');
+  $('#ambExit').addEventListener('click', exit);
+  $('#ambFull').addEventListener('click', () => {
+    if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+    else document.documentElement.requestFullscreen().catch(() => {});
+  });
+  state.wallKey = e => { if (e.key === 'Escape' && !document.fullscreenElement) exit(); };
+  document.addEventListener('keydown', state.wallKey);
+  const refresh = async () => {
+    try {
+      const data = await api('/api/overview');
+      state.nodes = data.nodes || [];
+      state.settings = data.settings || state.settings;
+      const el = $('#ambNodes');
+      if (el) el.innerHTML = ambientNodesHTML();
+    } catch (e) { /* keep last frame */ }
+  };
+  if (!state.nodes.length) refresh();
+  state.pageTimer = setInterval(refresh, 5000);
+
+  const canvas = $('#ambientCanvas');
+  const ctx = canvas.getContext('2d');
+  let stars = [];
+  const resize = () => {
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+    stars = Array.from({ length: 90 }, () => ({
+      x: Math.random(), y: Math.random(),
+      r: Math.random() * 1.4 + 0.3,
+      p: Math.random() * Math.PI * 2,
+      s: 0.3 + Math.random(),
+    }));
+  };
+  resize();
+  window.addEventListener('resize', resize);
+  state.ambientResize = resize;
+  const t0 = performance.now();
+  let lastClock = '';
+  const loop = now => {
+    if (!document.body.classList.contains('ambient-mode')) return;
+    const w = canvas.width, h = canvas.height;
+    if (!w || !h) { state.ambientRAF = requestAnimationFrame(loop); return; }
+    const t = (now - t0) / 1000;
+    const stats = ambientStats();
+    const hueBase = 188 + Math.min(100, stats.avg) * 1.35;
+    const base = ctx.createLinearGradient(0, 0, 0, h);
+    base.addColorStop(0, '#05070d');
+    base.addColorStop(0.55, '#070d18');
+    base.addColorStop(1, '#04060b');
+    ctx.fillStyle = base;
+    ctx.fillRect(0, 0, w, h);
+    for (const s of stars) {
+      const a = 0.35 + Math.sin(t * s.s * 1.4 + s.p) * 0.3;
+      ctx.fillStyle = `rgba(173, 208, 255, ${a.toFixed(3)})`;
+      ctx.beginPath();
+      ctx.arc(s.x * w, s.y * h, s.r, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.globalCompositeOperation = 'lighter';
+    const radius = Math.max(w, h);
+    const blobs = [
+      { x: w * (0.28 + 0.06 * Math.sin(t * 0.18)), y: h * (0.34 + 0.05 * Math.cos(t * 0.22)), r: radius * 0.42, hue: hueBase - 12, a: 0.16 },
+      { x: w * (0.72 + 0.05 * Math.cos(t * 0.14)), y: h * (0.5 + 0.06 * Math.sin(t * 0.17)), r: radius * 0.38, hue: hueBase + 32, a: 0.13 },
+      { x: w * (0.5 + 0.07 * Math.sin(t * 0.11 + 2)), y: h * (0.82 + 0.03 * Math.cos(t * 0.2)), r: radius * 0.34, hue: hueBase + 70, a: 0.1 },
+    ];
+    for (const b of blobs) {
+      const g = ctx.createRadialGradient(b.x, b.y, 0, b.x, b.y, b.r);
+      g.addColorStop(0, `hsla(${b.hue}, 90%, 62%, ${b.a})`);
+      g.addColorStop(0.55, `hsla(${b.hue}, 90%, 52%, ${b.a * 0.4})`);
+      g.addColorStop(1, 'hsla(210, 90%, 50%, 0)');
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.arc(b.x, b.y, b.r, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.globalCompositeOperation = 'source-over';
+    const clock = $('#ambClock');
+    if (clock) {
+      const d = new Date();
+      const pad = v => String(v).padStart(2, '0');
+      const txt = `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+      if (txt !== lastClock) {
+        clock.textContent = txt;
+        const dateEl = $('#ambDate');
+        if (dateEl) dateEl.textContent = `${d.getFullYear()} 年 ${d.getMonth() + 1} 月 ${d.getDate()} 日 · 周${'日一二三四五六'[d.getDay()]}`;
+        const line = $('#ambLine');
+        if (line) line.innerHTML = `${stats.online.length} / ${stats.nodes.length} 台在线 <i></i> 平均负载 <b>${stats.avg.toFixed(0)}%</b> <i></i> ${stats.avg < 45 ? '机房风平浪静' : stats.avg < 75 ? '算力暖流经过' : '高负载极光'}`;
+        lastClock = txt;
+      }
+    }
+    state.ambientRAF = requestAnimationFrame(loop);
+  };
+  state.ambientRAF = requestAnimationFrame(loop);
+}
+
+/* ---------- command palette ---------- */
+
+const PALETTE_PAGES = [
+  ['overview', '概览', '节点状态与资源趋势', 'overview'],
+  ['topology', '机房拓扑', '可视化机房连接', 'topology'],
+  ['personality', '性格周报', '服务器性格与周报', 'heart'],
+  ['timeline', '故障回放', '回放历史事件时间轴', 'clock'],
+  ['stocks', '行情', '服务器健康度股票行情', 'stocks'],
+  ['park', '服务器乐园', '宠物 / 天气 / 成就', 'park'],
+  ['containers', '容器', 'Docker 容器管理', 'container'],
+  ['apps', '应用', 'Compose 应用栈', 'app'],
+  ['files', '文件', 'SFTP 文件管理', 'folder'],
+  ['terminal', '终端', '网页 SSH 终端', 'terminal'],
+  ['ai', 'AI 助手', '自然语言运维', 'spark'],
+  ['settings', '设置', '通知 / AI / 节点', 'settings'],
+];
+
+function paletteEntries() {
+  const items = PALETTE_PAGES.map(([page, label, hint, icon]) => ({
+    kind: '页面', label, hint, icon, run: () => navigate(page),
+  }));
+  items.push(
+    { kind: '界面', label: '监控大屏', hint: '挂机监控视图', icon: 'wall', run: () => navigate('wall') },
+    { kind: '界面', label: '氛围屏', hint: '动态极光背景屏', icon: 'ambient', run: () => navigate('ambient') },
+  );
+  if (hasWindowHost()) items.push({ kind: '界面', label: '悬浮挂件', hint: '置顶小窗监控', icon: 'widget', run: () => enterWidgetMode() });
+  items.push(
+    { kind: '操作', label: '刷新当前页', hint: '重新拉取数据', icon: 'refresh', run: () => refreshCurrentPage() },
+    { kind: '操作', label: '一键巡检', hint: '生成健康评分卡', icon: 'activity', run: () => { navigate('overview'); setTimeout(openInspect, 30); } },
+    { kind: '操作', label: '添加节点', hint: '纳管一台新服务器', icon: 'plus', run: () => openNodeForm(null) },
+    { kind: '操作', label: state.theme === 'dark' ? '切换到浅色主题' : '切换到深色主题', hint: '外观偏好', icon: state.theme === 'dark' ? 'sun' : 'moon', run: () => toggleTheme() },
+  );
+  state.nodes.forEach(n => items.push({
+    kind: '节点', label: n.name, hint: `${n.user}@${n.addr}${n.online ? '' : ' · 离线'}`, icon: 'server',
+    run: () => { selectNode(n.id); navigate('overview'); },
+  }));
+  return items;
+}
+
+function renderPaletteList() {
+  const list = $('#palList');
+  if (!list) return;
+  const input = $('#palInput');
+  const q = input ? input.value.trim().toLowerCase() : '';
+  let items = paletteEntries();
+  if (q) {
+    const scored = [];
+    for (const it of items) {
+      const hay = `${it.label} ${it.hint} ${it.kind}`.toLowerCase();
+      const idx = hay.indexOf(q);
+      if (idx >= 0) scored.push({ it, rank: it.label.toLowerCase().startsWith(q) ? 0 : idx });
+    }
+    scored.sort((a, b) => a.rank - b.rank);
+    items = scored.map(s => s.it);
+  }
+  state.paletteFiltered = items;
+  if (state.paletteIndex >= items.length) state.paletteIndex = 0;
+  if (!items.length) {
+    list.innerHTML = `<div class="pal-empty">没有匹配的页面或操作</div>`;
+    return;
+  }
+  list.innerHTML = items.map((it, i) => `<button class="pal-item ${i === state.paletteIndex ? 'active' : ''}" data-pi="${i}">
+    <span class="pal-ico">${ico(it.icon)}</span>
+    <span class="pal-main"><b>${esc(it.label)}</b><span>${esc(it.hint)}</span></span>
+    <em>${it.kind}</em>
+  </button>`).join('');
+}
+
+function paletteSetIndex(i) {
+  const items = state.paletteFiltered;
+  if (!items.length) return;
+  state.paletteIndex = (i + items.length) % items.length;
+  $$('#palList .pal-item').forEach((el, idx) => el.classList.toggle('active', idx === state.paletteIndex));
+  const active = $('#palList .pal-item.active');
+  if (active) active.scrollIntoView({ block: 'nearest' });
+}
+
+function paletteRun() {
+  const item = state.paletteFiltered[state.paletteIndex];
+  if (!item) return;
+  closePalette();
+  setTimeout(() => {
+    try { item.run(); } catch (e) { toast(e.message, 'error'); }
+  }, 0);
+}
+
+function openPalette() {
+  if (!state.authed || state.paletteOpen) return;
+  state.paletteOpen = true;
+  state.paletteIndex = 0;
+  const root = document.createElement('div');
+  root.id = 'paletteRoot';
+  root.className = 'pal-mask';
+  root.innerHTML = `<div class="pal" role="dialog" aria-modal="true">
+    <div class="pal-input">${ico('search')}<input id="palInput" placeholder="搜索页面、节点或操作…" autocomplete="off" spellcheck="false"><kbd>Esc</kbd></div>
+    <div class="pal-list" id="palList"></div>
+    <div class="pal-foot"><span>↑↓ 选择</span><span>Enter 执行</span><span>Ctrl+K 关闭</span></div>
+  </div>`;
+  document.body.appendChild(root);
+  root.addEventListener('mousedown', e => { if (e.target === root) closePalette(); });
+  const input = $('#palInput');
+  input.addEventListener('input', () => { state.paletteIndex = 0; renderPaletteList(); });
+  input.addEventListener('keydown', e => {
+    if (e.key === 'ArrowDown') { e.preventDefault(); paletteSetIndex(state.paletteIndex + 1); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); paletteSetIndex(state.paletteIndex - 1); }
+    else if (e.key === 'Enter') { e.preventDefault(); paletteRun(); }
+    else if (e.key === 'Escape') { e.preventDefault(); closePalette(); }
+  });
+  $('#palList').addEventListener('click', e => {
+    const btn = e.target.closest('[data-pi]');
+    if (!btn) return;
+    state.paletteIndex = Number(btn.dataset.pi);
+    paletteRun();
+  });
+  $('#palList').addEventListener('mousemove', e => {
+    const btn = e.target.closest('[data-pi]');
+    if (btn && Number(btn.dataset.pi) !== state.paletteIndex) paletteSetIndex(Number(btn.dataset.pi));
+  });
+  renderPaletteList();
+  input.focus();
+}
+
+function closePalette() {
+  const root = $('#paletteRoot');
+  if (root) root.remove();
+  state.paletteOpen = false;
+  state.paletteFiltered = [];
+}
+
+function setupGlobalKeys() {
+  document.addEventListener('keydown', e => {
+    if ((e.ctrlKey || e.metaKey) && (e.key === 'k' || e.key === 'K')) {
+      if (!state.authed) return;
+      e.preventDefault();
+      if (state.paletteOpen) closePalette();
+      else openPalette();
+    }
+  });
 }
 
 /* ---------- personality ---------- */
@@ -4815,6 +5817,7 @@ function promptDialog(title, desc, value) {
 /* ---------- boot ---------- */
 
 async function boot() {
+  applyTheme(state.theme);
   setupWindowChrome();
   try {
     const res = await fetch('/api/me', { credentials: 'same-origin' });
@@ -4831,8 +5834,10 @@ async function boot() {
     return;
   }
   renderShell();
+  setupGlobalKeys();
   window.addEventListener('hashchange', onRoute);
   await loadOverview(false);
+  syncTray();
   if (!location.hash) history.replaceState(null, '', '#/overview');
   onRoute();
   state.nodeTimer = setInterval(refreshNodesLight, 30000);
