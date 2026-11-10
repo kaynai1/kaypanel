@@ -40,6 +40,12 @@ type Server struct {
 	changes  *changes.Manager
 	insights *insight.Store
 
+	wrapMu sync.Mutex
+	updMu  sync.Mutex
+
+	updCache   updateInfo
+	updCacheAt time.Time
+
 	desktopToken string
 }
 
@@ -112,6 +118,10 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/rootcause", s.auth(s.handleRootCause))
 	mux.Handle("POST /api/rootcause/ai", s.auth(s.handleRootCauseAI))
 	mux.Handle("POST /api/query", s.auth(s.handleQuery))
+	mux.Handle("GET /api/wrapped", s.auth(s.handleWrapped))
+	mux.Handle("GET /api/update/check", s.auth(s.handleUpdateCheck))
+	mux.Handle("POST /api/update/download", s.auth(s.handleUpdateDownload))
+	mux.Handle("POST /api/update/install", s.auth(s.handleUpdateInstall))
 
 	mux.HandleFunc("GET /api/status", s.handlePublicStatusAPI)
 	mux.HandleFunc("GET /status", s.handlePublicStatusPage)

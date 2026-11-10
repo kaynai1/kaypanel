@@ -51,3 +51,4 @@ Name: "{autodesktop}\KayPanel"; Filename: "{app}\KayPanel.exe"; Tasks: desktopic
 
 [Run]
 Filename: "{app}\KayPanel.exe"; Description: "启动 KayPanel"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\KayPanel.exe"; Flags: nowait runhidden; Check: WizardSilent

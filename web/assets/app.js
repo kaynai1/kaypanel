@@ -1,6 +1,6 @@
 'use strict';
 
-const TOP_PAGES = ['overview', 'topology', 'netmatrix', 'security', 'broadcast', 'rootcause', 'ask', 'drill', 'personality', 'timeline', 'probes', 'batch', 'changes', 'drift', 'stocks', 'park', 'containers', 'apps', 'files', 'terminal', 'ai', 'cost', 'settings'];
+const TOP_PAGES = ['overview', 'command', 'topology', 'netmatrix', 'security', 'broadcast', 'rootcause', 'ask', 'drill', 'wrapped', 'personality', 'timeline', 'probes', 'batch', 'changes', 'drift', 'stocks', 'park', 'containers', 'apps', 'files', 'terminal', 'ai', 'cost', 'settings'];
 const $ = (sel, el = document) => el.querySelector(sel);
 const $$ = (sel, el = document) => Array.from(el.querySelectorAll(sel));
 
@@ -119,6 +119,20 @@ const state = {
   drillNote: '',
   drillResult: null,
   drillEvalBusy: false,
+  commandTimer: null,
+  commandRAF: null,
+  dcSpin: 0,
+  dcAuto: true,
+  dcAutoBase: 0,
+  dcDragging: false,
+  wrapped: null,
+  wrappedBusy: false,
+  wrappedError: '',
+  update: null,
+  updateBusy: false,
+  updateError: '',
+  updatePhase: '',
+  updateFile: null,
 };
 
 function prefOn(key) {
@@ -180,6 +194,8 @@ const ICON_PATHS = {
   rootcause: '<circle cx="10.5" cy="10.5" r="6.5"/><path d="m15.5 15.5 5 5"/><circle cx="8.2" cy="10.5" r="1.1"/><circle cx="12.8" cy="8" r="1.1"/><circle cx="12.8" cy="13" r="1.1"/><path d="m9.2 10.2 2.6-1.5M9.3 10.9l2.4 1.5"/>',
   ask: '<path d="M21 11.5a8 8 0 0 1-8 8H9l-4 2 1.2-4.2A8 8 0 1 1 21 11.5Z"/><path d="M8.5 11.5h.01M12 11.5h.01M15.5 11.5h.01"/>',
   drill: '<circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="4.5"/><circle cx="12" cy="12" r="1"/><path d="M12 3.5V6M12 18v2.5M3.5 12H6M18 12h2.5"/>',
+  cube: '<path d="m12 3 8.2 4.7v8.6L12 21l-8.2-4.7V7.7L12 3Z"/><path d="M3.8 7.7 12 12.3l8.2-4.6"/><path d="M12 12.3V21"/>',
+  update: '<path d="M20 11a8 8 0 1 0-2.6 6.3"/><path d="M20 4v7h-7"/>',
 };
 
 function ico(name, cls = '') {
@@ -423,6 +439,7 @@ function renderShell() {
       <nav class="side-nav" id="sideNav">
         <div class="nav-group">监控</div>
         <button class="nav-item" data-page="overview">${ico('overview')}<span>概览</span></button>
+        <button class="nav-item" data-page="command">${ico('cube')}<span>3D 指挥室</span></button>
         <button class="nav-item" data-page="topology">${ico('topology')}<span>机房拓扑</span></button>
         <button class="nav-item" data-page="netmatrix">${ico('network')}<span>网络质量</span></button>
         <button class="nav-item" data-page="security">${ico('shield')}<span>安全体检</span></button>
@@ -444,11 +461,12 @@ function renderShell() {
         <button class="nav-item" data-page="terminal">${ico('terminal')}<span>终端</span></button>
         <button class="nav-item" data-page="ai">${ico('spark')}<span>AI 助手</span></button>
         <div class="nav-group">趣味</div>
+        <button class="nav-item" data-page="wrapped">${ico('trophy')}<span>年度 Wrapped</span></button>
         <button class="nav-item" data-page="stocks">${ico('stocks')}<span>行情</span></button>
         <button class="nav-item" data-page="park">${ico('park')}<span>服务器乐园</span></button>
         <div class="nav-group">系统</div>
         <button class="nav-item" data-page="cost">${ico('coin')}<span>电费账本</span></button>
-        <button class="nav-item" data-page="settings">${ico('settings')}<span>设置</span></button>
+        <button class="nav-item" data-page="settings">${ico('settings')}<span>设置</span><span class="nav-dot hidden" id="navUpdDot"></span></button>
       </nav>
       <div class="side-foot">
         <span class="foot-ic">${ico('activity')}</span>
@@ -561,6 +579,9 @@ function refreshCurrentPage() {
   if (state.subview && state.subview.type === 'inspect') { loadInspect(); return; }
   switch (state.page) {
     case 'overview': loadOverview(true); loadProcesses(); break;
+    case 'command':
+      loadOverview(false).then(() => { if (state.page === 'command' && !state.subview) refreshCommandView(); });
+      break;
     case 'topology': loadTopology(true); break;
     case 'netmatrix': loadNetMatrix(true); break;
     case 'security': loadSecurity(true); break;
@@ -575,6 +596,7 @@ function refreshCurrentPage() {
       else renderPage();
       break;
     case 'drill': loadDrill(true); break;
+    case 'wrapped': loadWrapped(true); break;
     case 'batch': renderPage(); break;
     case 'personality': loadPersonality(true); break;
     case 'timeline': loadTimeline(true); break;
@@ -706,6 +728,8 @@ function cleanupPage() {
   if (state.topoPoll) { clearInterval(state.topoPoll); state.topoPoll = null; }
   if (state.topoResize) { window.removeEventListener('resize', state.topoResize); state.topoResize = null; }
   if (state.widgetTimer) { clearInterval(state.widgetTimer); state.widgetTimer = null; }
+  if (state.commandTimer) { clearInterval(state.commandTimer); state.commandTimer = null; }
+  if (state.commandRAF) { cancelAnimationFrame(state.commandRAF); state.commandRAF = null; }
   tlPlayPause();
   if (state.tlPlay.cache) state.tlPlay.cache = null;
   const wall = $('#wallRoot');
@@ -743,6 +767,7 @@ function renderPage() {
   if (sub && sub.type === 'ai-stack') return renderAIStack();
   switch (state.page) {
     case 'overview': return renderOverview();
+    case 'command': return renderCommand();
     case 'topology': return renderTopology();
     case 'netmatrix': return renderNetMatrix();
     case 'security': return renderSecurity();
@@ -753,6 +778,7 @@ function renderPage() {
     case 'rootcause': return renderRootCause();
     case 'ask': return renderAsk();
     case 'drill': return renderDrill();
+    case 'wrapped': return renderWrapped();
     case 'batch': return renderBatch();
     case 'cost': return renderCost();
     case 'personality': return renderPersonality();
@@ -780,6 +806,212 @@ function syncRail() {
   } else if (!$('#railNodes')) {
     renderRail();
   }
+}
+
+/* ---------- 3D command room ---------- */
+
+function commandTone(n) {
+  if (!n.online) return 'off';
+  const alerts = n.alerts || [];
+  if (alerts.length) return 'warn';
+  return 'ok';
+}
+
+function commandNodesHTML(nodes) {
+  if (!nodes.length) return '';
+  const n = nodes.length;
+  return nodes.map((node, i) => {
+    const a = -Math.PI / 2 + (i * Math.PI * 2) / n;
+    const rx = n <= 2 ? 24 : 33;
+    const ry = n <= 2 ? 19 : 28;
+    const left = 50 + Math.cos(a) * rx;
+    const top = 50 + Math.sin(a) * ry;
+    const cpu = Math.max(0, Number(node.latest && node.latest.cpu) || 0);
+    const latest = node.latest || {};
+    const mem = latest.mem_total ? (Number(latest.mem_used) || 0) / latest.mem_total * 100 : 0;
+    const h = !node.online ? 46 : Math.round(72 + Math.min(118, cpu * 1.5));
+    const badge = (node.alerts || [])[0];
+    return `<div class="dc-node tone-${commandTone(node)}" data-node="${esc(node.id)}" style="left:${left.toFixed(2)}%;top:${top.toFixed(2)}%">
+      <span class="dc-pad"></span>
+      <span class="dc-beam" style="--h:${h}px">
+        <span class="dc-plate">
+          <b>${esc(node.name)}</b>
+          <span class="dc-plate-meta"><i class="dot ${nodeDotClass(node)}"></i>CPU ${cpu.toFixed(0)}% · MEM ${mem.toFixed(0)}%</span>
+          ${badge ? `<em>${esc(badge)}</em>` : ''}
+        </span>
+      </span>
+    </div>`;
+  }).join('');
+}
+
+function commandCardsHTML(nodes) {
+  return nodes.map(node => {
+    const latest = node.latest || {};
+    const cpu = Math.max(0, Number(latest.cpu) || 0);
+    const mem = latest.mem_total ? (Number(latest.mem_used) || 0) / latest.mem_total * 100 : 0;
+    const badge = (node.alerts || [])[0];
+    return `<button class="card dc-ncard tone-${commandTone(node)}" data-node="${esc(node.id)}">
+      <span class="dc-ncard-top"><b>${esc(node.name)}</b><i class="dot ${nodeDotClass(node)}"></i></span>
+      <span class="dc-ncard-sub">${esc(node.user)}@${esc(node.addr)} · ${node.online ? '在线' : '离线'}</span>
+      <span class="dc-meter"><span>CPU</span><i><b style="width:${Math.min(100, cpu)}%"></b></i><em>${cpu.toFixed(0)}%</em></span>
+      <span class="dc-meter"><span>MEM</span><i><b style="width:${Math.min(100, mem)}%"></b></i><em>${mem.toFixed(0)}%</em></span>
+      ${badge ? `<span class="dc-ncard-alert">${esc(badge)}</span>` : '<span class="dc-ncard-ok">运行正常</span>'}
+    </button>`;
+  }).join('') || '<div class="card empty"><h3>还没有节点</h3><p>添加服务器后指挥室会自动生成光柱</p></div>';
+}
+
+function refreshCommandView() {
+  const nodes = state.nodes || [];
+  const wrap = $('#dcNodes');
+  if (wrap) wrap.innerHTML = commandNodesHTML(nodes);
+  const cards = $('#dcCards');
+  if (cards) cards.innerHTML = commandCardsHTML(nodes);
+  const on = nodes.filter(n => n.online);
+  const avg = on.length ? on.reduce((a, n) => a + (Number(n.latest && n.latest.cpu) || 0), 0) / on.length : 0;
+  const alerts = nodes.filter(n => (n.alerts || []).length).length;
+  const peak = nodes.reduce((a, n) => Math.max(a, Number(n.latest && n.latest.cpu) || 0), 0);
+  const set = (sel, v) => { const el = $(sel); if (el) el.textContent = v; };
+  set('#dcOnline', on.length);
+  set('#dcCoreOnline', on.length);
+  set('#dcCoreTotal', '/' + nodes.length);
+  set('#dcAvgCpu', on.length ? avg.toFixed(0) + '%' : '—');
+  set('#dcAlerts', alerts);
+  set('#dcPeak', nodes.length ? peak.toFixed(0) + '%' : '—');
+  set('#dcClock', new Date().toLocaleTimeString('zh-CN', { hour12: false }));
+}
+
+function bindCommandStage() {
+  const stage = $('#dcStage');
+  const world = $('#dcWorld');
+  if (!stage || !world || stage.dataset.bound) return;
+  stage.dataset.bound = '1';
+  let startX = 0;
+  let startSpin = 0;
+  let moved = false;
+  stage.addEventListener('pointerdown', e => {
+    if (e.button !== 0) return;
+    state.dcDragging = true;
+    state.dcAutoBase = state.dcSpin;
+    moved = false;
+    startX = e.clientX;
+    startSpin = state.dcSpin;
+    stage.classList.add('dragging');
+    if (stage.setPointerCapture) stage.setPointerCapture(e.pointerId);
+  });
+  stage.addEventListener('pointermove', e => {
+    if (!state.dcDragging) return;
+    const dx = e.clientX - startX;
+    if (Math.abs(dx) > 4) moved = true;
+    state.dcSpin = Math.max(-38, Math.min(38, startSpin + dx * 0.22));
+    world.style.setProperty('--spin', state.dcSpin.toFixed(2) + 'deg');
+  });
+  const end = e => {
+    if (!state.dcDragging) return;
+    state.dcDragging = false;
+    stage.classList.remove('dragging');
+    state.dcAutoBase = state.dcSpin;
+    if (!moved) {
+      const hit = document.elementFromPoint(e.clientX, e.clientY);
+      const node = hit && hit.closest('[data-node]');
+      if (node && node.dataset.node) {
+        selectNode(node.dataset.node);
+        navigate('overview');
+      }
+    }
+  };
+  stage.addEventListener('pointerup', end);
+  stage.addEventListener('pointercancel', end);
+}
+
+function startCommandLoop() {
+  if (state.commandRAF) cancelAnimationFrame(state.commandRAF);
+  const world = $('#dcWorld');
+  if (!world) return;
+  world.style.setProperty('--spin', state.dcSpin.toFixed(2) + 'deg');
+  const tick = now => {
+    if (state.page !== 'command' || !world.isConnected) return;
+    if (state.dcAuto && !state.dcDragging) {
+      state.dcSpin = state.dcAutoBase + Math.sin(now / 3200) * 6;
+      world.style.setProperty('--spin', state.dcSpin.toFixed(2) + 'deg');
+    }
+    state.commandRAF = requestAnimationFrame(tick);
+  };
+  state.commandRAF = requestAnimationFrame(tick);
+}
+
+function renderCommand() {
+  const page = $('#page');
+  if (!page) return;
+  page.innerHTML = `
+    <section class="page-head">
+      <div><h1>3D 指挥室</h1><p class="page-sub">把机房摊开成全息沙盘：光柱高度是 CPU，颜色是健康状态，点击光柱直接进入对应节点</p></div>
+      <div class="head-actions">
+        <button class="btn sm ghost" id="dcAuto">暂停巡航</button>
+        <button class="btn sm ghost" id="dcReset">重置视角</button>
+        <button class="btn sm primary" id="dcWall">进入大屏</button>
+      </div>
+    </section>
+    <div class="dc-stage" id="dcStage">
+      <div class="dc-perspective">
+        <div class="dc-world" id="dcWorld">
+          <div class="dc-floor"><span class="dc-sweep"></span></div>
+          <div class="dc-core">
+            <span class="dc-orbit r1"></span><span class="dc-orbit r2"></span><span class="dc-orbit r3"></span>
+            <div class="dc-core-label">
+              <span class="dc-kicker">KAYPANEL · COMMAND DECK</span>
+              <b><span id="dcCoreOnline">0</span><em id="dcCoreTotal">/0</em></b>
+              <span class="dc-core-sub">节点在线</span>
+            </div>
+          </div>
+          <div class="dc-nodes" id="dcNodes"></div>
+        </div>
+      </div>
+      <div class="dc-hud">
+        <span class="dc-kicker">ROOM STATUS</span>
+        <div class="dc-hud-main"><b id="dcOnline">0</b><span>台在线</span><i class="dc-live-dot"></i></div>
+        <div class="dc-hud-stats">
+          <span>平均 CPU <b id="dcAvgCpu">—</b></span>
+          <span>告警 <b id="dcAlerts">0</b></span>
+          <span>峰值 <b id="dcPeak">—</b></span>
+        </div>
+      </div>
+      <div class="dc-hud right">
+        <span class="dc-clock" id="dcClock">--:--:--</span>
+        <span class="dc-hintline">拖动旋转视角 · 点击光柱进入概览</span>
+      </div>
+      <div class="dc-legend"><span><i class="ok"></i>健康</span><span><i class="warn"></i>告警</span><span><i class="off"></i>离线</span><span class="dc-legend-live"><i></i>每 5 秒扫描</span></div>
+    </div>
+    <div class="dc-cards" id="dcCards"></div>
+    <div class="insp-foot">指挥室只读取面板缓存的监控快照，不会登录节点执行命令。节点位置按纳管顺序环绕核心排列。</div>`;
+  refreshCommandView();
+  bindCommandStage();
+  startCommandLoop();
+  const cards = $('#dcCards');
+  if (cards) cards.addEventListener('click', e => {
+    const btn = e.target.closest('[data-node]');
+    if (btn) { selectNode(btn.dataset.node); navigate('overview'); }
+  });
+  const auto = $('#dcAuto');
+  if (auto) auto.addEventListener('click', () => {
+    state.dcAuto = !state.dcAuto;
+    state.dcAutoBase = state.dcSpin;
+    auto.textContent = state.dcAuto ? '暂停巡航' : '继续巡航';
+  });
+  const reset = $('#dcReset');
+  if (reset) reset.addEventListener('click', () => {
+    state.dcSpin = 0;
+    state.dcAutoBase = 0;
+    const world = $('#dcWorld');
+    if (world) world.style.setProperty('--spin', '0deg');
+  });
+  const wall = $('#dcWall');
+  if (wall) wall.addEventListener('click', () => navigate('wall'));
+  if (state.commandTimer) clearInterval(state.commandTimer);
+  state.commandTimer = setInterval(async () => {
+    if (state.page !== 'command' || state.subview) return;
+    await loadOverview(false);
+    if (state.page === 'command' && !state.subview) refreshCommandView();
+  }, 5000);
 }
 
 /* ---------- wall ---------- */
@@ -942,7 +1174,7 @@ async function loadOverview(render = true) {
 }
 
 async function refreshNodesLight() {
-  if (['overview', 'wall', 'widget', 'topology'].includes(state.page) && !state.subview) return;
+  if (['overview', 'command', 'wall', 'widget', 'topology'].includes(state.page) && !state.subview) return;
   try {
     const d = await api('/api/nodes?light=1');
     const list = d.nodes || [];
@@ -4059,6 +4291,7 @@ function renderAmbient() {
 
 const PALETTE_PAGES = [
   ['overview', '概览', '节点状态与资源趋势', 'overview'],
+  ['command', '3D 指挥室', '全息机房指挥台', 'cube'],
   ['topology', '机房拓扑', '可视化机房连接', 'topology'],
   ['netmatrix', '网络质量', '节点间延迟与丢包矩阵', 'network'],
   ['security', '安全体检', 'SSH / 防火墙 / 证书检查', 'shield'],
@@ -4066,6 +4299,7 @@ const PALETTE_PAGES = [
   ['rootcause', '根因分析', '跨节点异常关联与怀疑排序', 'rootcause'],
   ['ask', '指标问答', '用自然语言查历史指标', 'ask'],
   ['drill', '故障演练', 'SRE 故障场景模拟考核', 'drill'],
+  ['wrapped', '年度 Wrapped', '这一年的服务器数据故事', 'trophy'],
   ['probes', '拨测状态', '网站与端口可用性 + 公开状态页', 'probe'],
   ['changes', '变更记录', '文件与应用修改回滚', 'history'],
   ['drift', '配置漂移', '对比节点关键配置差异', 'diff'],
@@ -5214,6 +5448,7 @@ function renderSettings() {
       <div class="head-actions">
         <button class="btn sm ghost" data-jump="setNotify">通知</button>
         <button class="btn sm ghost" data-jump="setAI">AI</button>
+        <button class="btn sm ghost" data-jump="setUpdate">更新</button>
         <button class="btn sm ghost" data-jump="setNodes">节点</button>
         <button class="btn sm ghost" data-jump="setAudit">日志</button>
       </div>
@@ -5286,6 +5521,10 @@ function renderSettings() {
       </div>
     </div>
     <div class="settings-grid">
+      <div class="card settings-card full" id="setUpdate">
+        ${settingHead('update', '应用更新', state.desktop ? '自动从 GitHub Releases 检查新版本，一键下载并静默安装' : '检查是否有新版本；网页版可在 GitHub Releases 下载')}
+        ${updateCardHTML()}
+      </div>
       <div class="card settings-card full" id="setNodes">
         ${settingHead('server', '节点管理', '通过 SSH 纳管服务器，无需在目标机器安装 Agent')}
         <div class="node-list" id="nodeList"></div>
@@ -5308,6 +5547,7 @@ function renderSettings() {
     </div>`;
 
   renderNodeList();
+  bindUpdateCard();
   $$('[data-jump]').forEach(b => b.addEventListener('click', () => {
     const el = document.getElementById(b.dataset.jump);
     if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -5845,6 +6085,411 @@ function renderNodeForm(sub) {
 
   $('#nodeSave').addEventListener('click', () => save(false));
   $('#nodeSaveTest').addEventListener('click', () => save(true));
+}
+
+/* ---------- annual wrapped ---------- */
+
+function loadWrapped(force) {
+  if (state.wrappedBusy) return;
+  state.wrappedBusy = true;
+  state.wrappedError = '';
+  api('/api/wrapped').then(d => {
+    state.wrapped = d;
+  }).catch(e => {
+    state.wrappedError = e.message;
+    if (force) toast(e.message, 'error', 6500);
+  }).finally(() => {
+    state.wrappedBusy = false;
+    if (state.page === 'wrapped' && !state.subview) renderPage();
+  });
+  if (force) toast('正在汇总年度数据…', '', 1500);
+}
+
+function wrappedHTML(d) {
+  const nodes = d.nodes || [];
+  const months = d.monthly || [];
+  const maxMonth = Math.max(1, ...months.map(m => m.samples));
+  const monthly = months.map(m => `<div class="wr-month" title="${m.samples} 次采样 · 平均 CPU ${m.cpu_avg}%">
+      <span class="wr-month-bar"><i style="height:${Math.max(4, Math.round(m.samples / maxMonth * 100))}%"></i></span>
+      <b>${esc(m.label)}</b><em>${m.samples ? m.samples : ''}</em>
+    </div>`).join('');
+  const rows = nodes.map((n, i) => `<div class="wr-row">
+      <span class="wr-rank">${i + 1}</span>
+      <span class="wr-row-main"><b>${esc(n.name)}</b><span>观察 ${n.days} 天 · ${n.samples} 次采样${n.night ? ` · 深夜 ${n.night} 次` : ''}</span></span>
+      <span class="wr-row-bars">
+        <span class="wr-mini"><i><b style="width:${Math.min(100, n.cpu_avg)}%"></b></i><em>CPU ${n.cpu_avg}%</em></span>
+        <span class="wr-mini mem"><i><b style="width:${Math.min(100, n.mem_avg)}%"></b></i><em>MEM ${n.mem_avg}%</em></span>
+      </span>
+      <span class="wr-row-on">${n.online_pct}%<small>采样覆盖</small></span>
+    </div>`).join('') || '<div class="muted">还没有节点数据</div>';
+
+  const busiest = d.busiest;
+  const calmest = d.calmest;
+  const owl = d.night_owl;
+  return `<div class="wr-hero">
+    <span class="wr-eyebrow">KAYPANEL · ANNUAL REPORT</span>
+    <div class="wr-year">${d.year}<span>年度报告</span></div>
+    <p class="wr-hero-line">从 ${esc(d.first_day)} 到 ${esc(d.last_day)}，你和 ${nodes.length} 台服务器一起走过了 ${d.days} 天。</p>
+    <div class="wr-hero-stats">
+      <div><b>${d.samples}</b><span>次采样</span></div>
+      <div><b>${d.cpu_avg}%</b><span>平均 CPU</span></div>
+      <div><b>${d.peak.value ? d.peak.value + '%' : '—'}</b><span>年度峰值</span></div>
+    </div>
+    <span class="wr-hero-orbit o1"></span><span class="wr-hero-orbit o2"></span><span class="wr-hero-orbit o3"></span>
+  </div>
+  <div class="wr-grid">
+    <div class="wr-block wide peak">
+      <span class="wr-label">年度峰值时刻</span>
+      <b class="wr-big">${d.peak.value ? d.peak.value + '%' : '—'}</b>
+      <p>${d.peak.value ? `${esc(d.peak.node)} 在 ${esc(fmtTime(d.peak.time))} 把 CPU 拉到全年最高。` : '还没有峰值记录。'}</p>
+    </div>
+    <div class="wr-block">
+      <span class="wr-label">最忙的节点</span>
+      <b>${busiest ? esc(busiest.name) : '—'}</b>
+      <p>${busiest ? `平均 CPU ${busiest.cpu_avg}%，峰值 ${busiest.cpu_peak}%` : '等待数据'}</p>
+    </div>
+    <div class="wr-block">
+      <span class="wr-label">最省心的节点</span>
+      <b>${calmest ? esc(calmest.name) : '—'}</b>
+      <p>${calmest ? `平均 CPU 只有 ${calmest.cpu_avg}%，采样覆盖 ${calmest.online_pct}%` : '等待数据'}</p>
+    </div>
+    <div class="wr-block wide">
+      <span class="wr-label">深夜还在转</span>
+      <b>${d.night}<em>次</em></b>
+      <p>0-6 点的采样${owl ? `，${esc(owl.name)} 最晚睡（${owl.night} 次）` : ''}。</p>
+    </div>
+    <div class="wr-block wide">
+      <span class="wr-label">运维事件</span>
+      <b>${d.events}<em>条</em></b>
+      <p>其中 ${d.errors} 条异常；面板共记下 ${d.samples} 个采样瞬间。</p>
+    </div>
+  </div>
+  <div class="wr-block full">
+    <span class="wr-label">月度节奏</span>
+    <div class="wr-months">${monthly || '<span class="muted">暂无月度数据</span>'}</div>
+  </div>
+  <div class="wr-block full">
+    <span class="wr-label">节点成绩单</span>
+    <div class="wr-rows">${rows}</div>
+  </div>
+  <div class="wr-final"><b>明年也一起稳下去。</b><span>KAYPANEL ${esc(d.version || '')}</span></div>`;
+}
+
+function renderWrapped() {
+  const page = $('#page');
+  if (!page) return;
+  const d = state.wrapped;
+  const busy = state.wrappedBusy;
+  const canExport = !!d && d.days > 0 && !busy;
+  page.innerHTML = `
+    <section class="page-head">
+      <div><h1>年度 Wrapped</h1><p class="page-sub">${d && d.days ? `${d.year} 年 · ${esc(d.first_day)} 至 ${esc(d.last_day)} · ${d.days} 天数据` : '把这一年的监控采样、峰值和深夜值守写成故事'}</p></div>
+      <div class="head-actions">
+        <button class="btn sm" id="wrRefresh" ${busy ? 'disabled' : ''}>${busy ? '统计中…' : '重新统计'}</button>
+        <button class="btn sm" id="wrCopy" ${canExport ? '' : 'disabled'}>复制图片</button>
+        <button class="btn sm primary" id="wrSave" ${canExport ? '' : 'disabled'}>保存长图</button>
+      </div>
+    </section>
+    ${state.wrappedError ? `<div class="banner error">${esc(state.wrappedError)}</div>` : ''}
+    ${d && d.days ? wrappedHTML(d) : `<div class="card empty"><h3>${busy ? '正在汇总…' : '还没有足够的数据'}</h3><p>数据从面板开始采集时累计，趋势每 5 分钟一次；多跑几天，报告会越来越完整</p></div>`}`;
+  $('#wrRefresh').addEventListener('click', () => loadWrapped(true));
+  if (canExport) {
+    $('#wrSave').addEventListener('click', saveWrappedImage);
+    $('#wrCopy').addEventListener('click', copyWrappedImage);
+  }
+  if (!d && !busy && !state.wrappedError) setTimeout(() => loadWrapped(false), 0);
+}
+
+function buildWrappedCanvas(d) {
+  const W = 1000;
+  const nodes = d.nodes || [];
+  const pad = 56;
+  const nodeH = 78;
+  const monthsH = 190;
+  const H = 470 + 200 + monthsH + Math.max(1, nodes.length) * nodeH + 120;
+  const canvas = document.createElement('canvas');
+  canvas.width = W;
+  canvas.height = H;
+  const ctx = canvas.getContext('2d');
+  const bg = ctx.createLinearGradient(0, 0, W, H);
+  bg.addColorStop(0, '#0d1024');
+  bg.addColorStop(0.5, '#0b1220');
+  bg.addColorStop(1, '#070d17');
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, W, H);
+
+  const glow = ctx.createRadialGradient(W * 0.82, 120, 10, W * 0.82, 120, 460);
+  glow.addColorStop(0, 'rgba(139,92,246,.35)');
+  glow.addColorStop(1, 'rgba(139,92,246,0)');
+  ctx.fillStyle = glow;
+  ctx.fillRect(0, 0, W, 520);
+  const glow2 = ctx.createRadialGradient(W * 0.18, 300, 10, W * 0.18, 300, 420);
+  glow2.addColorStop(0, 'rgba(34,211,238,.18)');
+  glow2.addColorStop(1, 'rgba(34,211,238,0)');
+  ctx.fillStyle = glow2;
+  ctx.fillRect(0, 0, W, 560);
+
+  ctx.fillStyle = '#67e8f9';
+  ctx.font = '600 13px ' + INSPECT_FONT;
+  ctx.fillText('KAYPANEL · ANNUAL REPORT', pad, 74);
+  ctx.fillStyle = '#f8fafc';
+  ctx.font = '700 88px ' + INSPECT_FONT;
+  ctx.fillText(String(d.year), pad, 178);
+  ctx.fillStyle = '#c4b5fd';
+  ctx.font = '600 26px ' + INSPECT_FONT;
+  ctx.fillText('年度报告', pad + ctx.measureText(String(d.year)).width + 190, 172);
+  ctx.fillStyle = '#94a3b8';
+  ctx.font = '400 17px ' + INSPECT_FONT;
+  ctx.fillText(fitCanvasText(ctx, `从 ${d.first_day} 到 ${d.last_day}，和 ${nodes.length} 台服务器一起走过 ${d.days} 天`, W - pad * 2), pad, 220);
+
+  const stats = [
+    ['采样次数', String(d.samples)],
+    ['平均 CPU', d.cpu_avg + '%'],
+    ['年度峰值', (d.peak.value || 0) + '%'],
+    ['运维事件', String(d.events)],
+  ];
+  const sw = (W - pad * 2 - 3 * 16) / 4;
+  stats.forEach(([label, value], i) => {
+    const x = pad + i * (sw + 16);
+    const y = 258;
+    roundRectPath(ctx, x, y, sw, 120, 18);
+    ctx.fillStyle = 'rgba(148,163,184,.08)';
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(148,163,184,.16)';
+    ctx.stroke();
+    ctx.fillStyle = '#e2e8f0';
+    ctx.font = '700 34px ' + INSPECT_FONT;
+    ctx.fillText(value, x + 22, y + 60);
+    ctx.fillStyle = '#94a3b8';
+    ctx.font = '400 14px ' + INSPECT_FONT;
+    ctx.fillText(label, x + 22, y + 92);
+  });
+
+  let y = 430;
+  ctx.fillStyle = '#a5b4fc';
+  ctx.font = '600 13px ' + INSPECT_FONT;
+  ctx.fillText('PEAK MOMENT', pad, y);
+  y += 34;
+  ctx.fillStyle = '#f8fafc';
+  ctx.font = '700 30px ' + INSPECT_FONT;
+  ctx.fillText(d.peak.value ? d.peak.value + '% · ' + d.peak.node : '还没有峰值记录', pad, y);
+  ctx.fillStyle = '#94a3b8';
+  ctx.font = '400 15px ' + INSPECT_FONT;
+  if (d.peak.value) ctx.fillText('出现在 ' + fmtTime(d.peak.time), pad, y + 30);
+  y += 70;
+
+  ctx.fillStyle = '#a5b4fc';
+  ctx.font = '600 13px ' + INSPECT_FONT;
+  ctx.fillText('MONTHLY RHYTHM', pad, y);
+  y += 28;
+  const months = d.monthly || [];
+  const maxMonth = Math.max(1, ...months.map(m => m.samples));
+  const mw = (W - pad * 2) / Math.max(1, months.length);
+  months.forEach((m, i) => {
+    const bh = Math.max(6, m.samples / maxMonth * 92);
+    const bx = pad + i * mw + mw * 0.18;
+    const bw = mw * 0.64;
+    const by = y + 100 - bh;
+    roundRectPath(ctx, bx, by, bw, bh, Math.min(8, bw / 2));
+    const mg = ctx.createLinearGradient(0, by, 0, by + bh);
+    mg.addColorStop(0, '#67e8f9');
+    mg.addColorStop(1, 'rgba(34,211,238,.25)');
+    ctx.fillStyle = m.samples ? mg : 'rgba(148,163,184,.14)';
+    ctx.fill();
+    ctx.fillStyle = '#64748b';
+    ctx.font = '400 12px ' + INSPECT_FONT;
+    ctx.textAlign = 'center';
+    ctx.fillText(m.label, bx + bw / 2, y + 124);
+    ctx.textAlign = 'left';
+  });
+  y += monthsH;
+
+  ctx.fillStyle = '#a5b4fc';
+  ctx.font = '600 13px ' + INSPECT_FONT;
+  ctx.fillText('NODE REPORT CARDS', pad, y);
+  y += 26;
+  nodes.forEach((n, i) => {
+    roundRectPath(ctx, pad, y, W - pad * 2, nodeH - 14, 16);
+    ctx.fillStyle = 'rgba(148,163,184,.07)';
+    ctx.fill();
+    ctx.fillStyle = '#67e8f9';
+    ctx.font = '700 20px ' + INSPECT_FONT;
+    ctx.fillText(String(i + 1).padStart(2, '0'), pad + 22, y + 40);
+    ctx.fillStyle = '#e2e8f0';
+    ctx.font = '600 18px ' + INSPECT_FONT;
+    ctx.fillText(fitCanvasText(ctx, n.name, 260), pad + 68, y + 34);
+    ctx.fillStyle = '#94a3b8';
+    ctx.font = '400 12.5px ' + INSPECT_FONT;
+    ctx.fillText(`${n.samples} 次采样 · 观察 ${n.days} 天`, pad + 68, y + 54);
+    const barX = W - pad - 360;
+    const bw = 200;
+    roundRectPath(ctx, barX, y + 20, bw, 8, 4);
+    ctx.fillStyle = 'rgba(148,163,184,.18)';
+    ctx.fill();
+    roundRectPath(ctx, barX, y + 20, bw * Math.min(1, n.cpu_avg / 100), 8, 4);
+    ctx.fillStyle = '#67e8f9';
+    ctx.fill();
+    ctx.fillStyle = '#cbd5e1';
+    ctx.font = '400 12.5px ' + INSPECT_FONT;
+    ctx.fillText(`CPU ${n.cpu_avg}% · MEM ${n.mem_avg}%`, barX, y + 54);
+    ctx.fillStyle = '#f8fafc';
+    ctx.font = '700 20px ' + INSPECT_FONT;
+    ctx.textAlign = 'right';
+    ctx.fillText(n.online_pct + '%', W - pad - 22, y + 40);
+    ctx.textAlign = 'left';
+    y += nodeH;
+  });
+
+  ctx.fillStyle = '#c4b5fd';
+  ctx.font = '600 22px ' + INSPECT_FONT;
+  ctx.fillText('明年也一起稳下去。', pad, H - 76);
+  ctx.fillStyle = '#64748b';
+  ctx.font = '400 13px ' + INSPECT_FONT;
+  ctx.fillText(`由 KayPanel 自动生成 · KayPanel ${d.version || ''}`, pad, H - 46);
+  ctx.textAlign = 'right';
+  ctx.fillText(fmtTime(d.time), W - pad, H - 46);
+  ctx.textAlign = 'left';
+  return canvas;
+}
+
+function saveWrappedImage() {
+  const d = state.wrapped;
+  if (!d || !d.days) return;
+  downloadCanvas(buildWrappedCanvas(d), `KayPanel-年度Wrapped-${d.year}-${inspectStamp()}.png`, '年度报告长图已保存');
+}
+
+function copyWrappedImage() {
+  const d = state.wrapped;
+  if (!d || !d.days) return;
+  copyCanvas(buildWrappedCanvas(d));
+}
+
+/* ---------- in-app update ---------- */
+
+function updateCardHTML() {
+  return `<div id="updBox">${updateBoxHTML()}</div>`;
+}
+
+function fmtUpdateDate(s) {
+  const t = Date.parse(s || '');
+  if (!t) return '';
+  return fmtTime(Math.floor(t / 1000));
+}
+
+function updateBoxHTML() {
+  const u = state.update;
+  if (state.updateBusy) {
+    const phase = state.updatePhase;
+    const label = phase === 'download' ? '正在下载安装包…' : phase === 'install' ? '正在启动安装程序…' : '正在检查更新…';
+    const sub = phase === 'download' ? '安装包约几十 MB，请保持网络畅通' : phase === 'install' ? '面板即将关闭并自动重启，无需手动操作' : '正在访问 GitHub Releases';
+    return `<div class="upd-state"><span class="spinner"></span><div><strong>${label}</strong><p class="muted">${sub}</p></div></div>`;
+  }
+  if (state.updatePhase === 'done') {
+    return `<div class="upd-state"><span class="upd-dot ok"></span><div><strong>安装程序已启动</strong><p class="muted">面板会自动关闭并重启到新版本，稍候几秒即可</p></div></div>`;
+  }
+  if (state.updateError) {
+    return `<div class="upd-state"><span class="upd-dot err"></span><div><strong>检查更新失败</strong><p class="muted">${esc(state.updateError)}</p></div></div>
+      <div class="upd-actions"><button class="btn sm" id="updCheck">重新检查</button></div>`;
+  }
+  if (!u) {
+    return `<div class="upd-row"><div><strong>当前版本 ${esc(state.version || 'dev')}</strong><p class="muted">检查是否有新的安装包</p></div>
+      <button class="btn sm" id="updCheck">检查更新</button></div>`;
+  }
+  if (!u.available) {
+    return `<div class="upd-row"><div class="upd-state inline"><span class="upd-dot ok"></span><div><strong>已是最新版本 ${esc(u.current || state.version || '')}</strong>
+      <p class="muted">上次检查 ${u.checked_at ? fmtTime(u.checked_at) : '刚刚'}${u.latest ? ' · GitHub 最新 ' + esc(u.latest) : ''}</p></div></div>
+      <button class="btn sm ghost" id="updCheck">重新检查</button></div>`;
+  }
+  const notes = (u.notes || '').trim();
+  const notesHTML = notes ? `<details class="upd-notes"><summary>更新内容</summary><pre>${esc(notes)}</pre></details>` : '';
+  const action = u.desktop
+    ? `<button class="btn primary" id="updInstall">下载并安装 ${esc(u.latest)}</button>`
+    : `<a class="btn sm" href="${esc(u.html_url)}" target="_blank" rel="noreferrer">前往 GitHub 下载</a>`;
+  return `<div class="upd-row upd-avail">
+      <div class="upd-state inline"><span class="upd-badge">新版本</span><div>
+        <strong>${esc(u.latest)}${u.asset_name ? ' · ' + esc(u.asset_name) : ''}</strong>
+        <p class="muted">发布于 ${fmtUpdateDate(u.published_at) || '-'}${u.size ? ' · ' + fmtBytes(u.size) : ''}</p>
+      </div></div>
+      <div class="upd-actions">${action}<button class="btn sm ghost" id="updCheck">刷新</button></div>
+    </div>${notesHTML}`;
+}
+
+function renderUpdateBox() {
+  const box = $('#updBox');
+  if (!box) return;
+  box.innerHTML = updateBoxHTML();
+  bindUpdateCard();
+}
+
+function bindUpdateCard() {
+  const check = $('#updCheck');
+  if (check) check.addEventListener('click', e => busyBtn(e.currentTarget, () => checkUpdate(false, true), '检查中…'));
+  const install = $('#updInstall');
+  if (install) install.addEventListener('click', installUpdate);
+}
+
+async function checkUpdate(silent, force) {
+  if (state.updateBusy) return;
+  state.updateBusy = true;
+  state.updateError = '';
+  state.updatePhase = '';
+  renderUpdateBox();
+  try {
+    const d = await api('/api/update/check' + (force ? '?force=1' : ''));
+    state.update = d;
+    applyUpdateBadge();
+    if (d.available) {
+      if (!silent) toast(`发现新版本 ${d.latest}`, 'success', 4000);
+    } else if (!silent) {
+      toast('已经是最新版本', 'success', 2600);
+    }
+  } catch (e) {
+    state.updateError = e.message;
+    state.update = null;
+    applyUpdateBadge();
+    if (!silent) toast(e.message, 'error', 7000);
+  } finally {
+    state.updateBusy = false;
+    if (state.page === 'settings') renderUpdateBox();
+  }
+}
+
+function applyUpdateBadge() {
+  const dot = $('#navUpdDot');
+  if (!dot) return;
+  const show = !!(state.update && state.update.available);
+  dot.classList.toggle('hidden', !show);
+  const btn = dot.closest('.nav-item');
+  if (btn) btn.title = show ? `发现新版本 ${state.update.latest}` : '';
+}
+
+async function installUpdate() {
+  const u = state.update;
+  if (!u || !u.available || state.updateBusy) return;
+  const ok = await confirmDialog(`更新到 ${u.latest}`,
+    `将下载 ${u.asset_name || '安装包'}（${fmtBytes(u.size)}），随后自动关闭面板并安装新版本。当前已打开的页面会在重启后恢复。`,
+    '下载并安装');
+  if (!ok) return;
+  state.updateBusy = true;
+  state.updatePhase = 'download';
+  state.updateError = '';
+  renderUpdateBox();
+  try {
+    const f = await api('/api/update/download', { method: 'POST', body: '{}' });
+    state.updateFile = f;
+    state.updatePhase = 'install';
+    renderUpdateBox();
+    await api('/api/update/install', { method: 'POST', body: JSON.stringify({ path: f.path }) });
+    state.updatePhase = 'done';
+    toast('安装程序已启动，面板即将重启', 'success', 5000);
+  } catch (e) {
+    state.updatePhase = '';
+    state.updateError = e.message;
+    toast(e.message, 'error', 8000);
+  } finally {
+    state.updateBusy = false;
+    renderUpdateBox();
+  }
 }
 
 /* ---------- batch 2: security, cost, netmatrix, probes, changes, batch ---------- */
@@ -7197,6 +7842,7 @@ async function boot() {
   if (!location.hash) history.replaceState(null, '', '#/overview');
   onRoute();
   state.nodeTimer = setInterval(refreshNodesLight, 30000);
+  if (state.desktop) setTimeout(() => checkUpdate(true), 6000);
 }
 
 if ('serviceWorker' in navigator) {
