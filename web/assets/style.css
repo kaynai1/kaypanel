@@ -483,6 +483,8 @@ button { cursor: pointer; }
 .info-row:last-child { border-bottom: 0; }
 .info-row span:first-child { color: var(--faint); white-space: nowrap; }
 .info-row span:last-child { color: var(--text-2); text-align: right; word-break: break-all; }
+#setAbout .info-row { display: grid; grid-template-columns: 88px minmax(0, 1fr); column-gap: 24px; }
+#setAbout .info-row span:last-child { text-align: left; }
 .os-pill { display: inline-block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .disk-block { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line-soft); }
 .disk-head { display: flex; justify-content: space-between; gap: 10px; font-size: 12.5px; color: var(--faint); margin-bottom: 6px; }

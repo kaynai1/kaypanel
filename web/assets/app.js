@@ -5535,7 +5535,7 @@ function renderSettings() {
         <div class="audit-list" id="auditList"><div class="muted">加载中…</div></div>
         <button class="btn sm ghost" id="auditRefresh">刷新日志</button>
       </div>
-      <div class="card settings-card full">
+      <div class="card settings-card full" id="setAbout">
         ${settingHead('info', '关于', `KayPanel ${esc(state.version || 'dev')} · 单二进制多机面板 · SSH 架构，无 Agent`)}
         <div class="info-list">
           <div class="info-row"><span>当前节点</span><span>${state.nodes.length} 台</span></div>
