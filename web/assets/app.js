@@ -5416,6 +5416,11 @@ async function saveSettings(payload, okText) {
     });
     if (payload.webhook) state.hasWebhook = true;
     if (payload.clear_webhook) state.hasWebhook = false;
+    if (payload.clear_smtp) {
+      Object.assign(state.settings, {
+        smtp_host: '', smtp_port: 0, smtp_mode: '', smtp_user: '', smtp_from: '', smtp_to: '',
+      });
+    }
     if (payload.clear_smtp || !payload.smtp_host || !payload.smtp_to) {
       state.hasSMTP = false;
       state.hasSMTPPass = false;
