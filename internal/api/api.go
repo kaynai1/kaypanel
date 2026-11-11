@@ -23,6 +23,7 @@ import (
 	"kaypanel/internal/instabox"
 	"kaypanel/internal/metrics"
 	"kaypanel/internal/node"
+	"kaypanel/internal/notify"
 	"kaypanel/internal/probe"
 )
 
@@ -347,10 +348,12 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"authenticated": true,
 		"version":       s.version,
-		"settings":      set,
-		"has_webhook":   strings.TrimSpace(set.Webhook) != "",
-		"has_ai_key":    strings.TrimSpace(set.AIKey) != "",
-		"desktop":       s.desktopToken != "",
+		"settings":       set,
+		"has_webhook":    strings.TrimSpace(set.Webhook) != "",
+		"has_smtp":       set.SMTPEnabled(),
+		"has_smtp_pass":  strings.TrimSpace(set.SMTPPass) != "",
+		"has_ai_key":     strings.TrimSpace(set.AIKey) != "",
+		"desktop":        s.desktopToken != "",
 	})
 }
 
@@ -384,10 +387,12 @@ func (s *Server) handlePassword(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 	set := s.store.Settings()
 	writeJSON(w, http.StatusOK, map[string]any{
-		"settings":    set,
-		"has_webhook": strings.TrimSpace(set.Webhook) != "",
-		"has_ai_key":  strings.TrimSpace(set.AIKey) != "",
-		"version":     s.version,
+		"settings":      set,
+		"has_webhook":   strings.TrimSpace(set.Webhook) != "",
+		"has_smtp":      set.SMTPEnabled(),
+		"has_smtp_pass": strings.TrimSpace(set.SMTPPass) != "",
+		"has_ai_key":    strings.TrimSpace(set.AIKey) != "",
+		"version":       s.version,
 	})
 }
 
@@ -399,6 +404,15 @@ type settingsReq struct {
 	ClearWebhook bool   `json:"clear_webhook"`
 	DailyReport  bool   `json:"daily_report"`
 	DailyHour    int    `json:"daily_hour"`
+	SMTPHost     string `json:"smtp_host"`
+	SMTPPort     int    `json:"smtp_port"`
+	SMTPMode     string `json:"smtp_mode"`
+	SMTPUser     string `json:"smtp_user"`
+	SMTPPass     string `json:"smtp_pass"`
+	ClearSMTPPass bool  `json:"clear_smtp_pass"`
+	ClearSMTP    bool   `json:"clear_smtp"`
+	SMTPFrom     string `json:"smtp_from"`
+	SMTPTo       string `json:"smtp_to"`
 	AIBase       string `json:"ai_base"`
 	AIModel      string `json:"ai_model"`
 	AIKey        string `json:"ai_key"`
@@ -444,6 +458,36 @@ func (s *Server) handleSetSettings(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		cfg.Webhook = v
+	}
+	cfg.SMTPHost, cfg.SMTPPort, cfg.SMTPMode = old.SMTPHost, old.SMTPPort, old.SMTPMode
+	cfg.SMTPUser, cfg.SMTPPass = old.SMTPUser, old.SMTPPass
+	cfg.SMTPFrom, cfg.SMTPTo = old.SMTPFrom, old.SMTPTo
+	host := strings.TrimSpace(req.SMTPHost)
+	if req.ClearSMTP || host == "" {
+		cfg.SMTPHost, cfg.SMTPPort, cfg.SMTPMode = "", 0, ""
+		cfg.SMTPUser, cfg.SMTPPass, cfg.SMTPFrom, cfg.SMTPTo = "", "", "", ""
+	} else {
+		mc, err := notify.NormalizeMail(notify.MailConfig{
+			Host: host, Port: req.SMTPPort, Mode: req.SMTPMode,
+			User: req.SMTPUser, Pass: req.SMTPPass,
+			From: req.SMTPFrom, To: []string{req.SMTPTo},
+		})
+		if err != nil {
+			writeErr(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		cfg.SMTPHost, cfg.SMTPPort, cfg.SMTPMode = mc.Host, mc.Port, mc.Mode
+		cfg.SMTPUser, cfg.SMTPFrom = mc.User, mc.From
+		cfg.SMTPTo = strings.Join(mc.To, ", ")
+		cfg.SMTPPass = old.SMTPPass
+		switch {
+		case req.ClearSMTPPass:
+			cfg.SMTPPass = ""
+		case strings.TrimSpace(req.SMTPPass) != "":
+			cfg.SMTPPass = req.SMTPPass
+		case old.SMTPHost != mc.Host || old.SMTPUser != mc.User:
+			cfg.SMTPPass = ""
+		}
 	}
 	cfg.AIBase = old.AIBase
 	if v := strings.TrimRight(strings.TrimSpace(req.AIBase), "/"); v != "" {
@@ -497,11 +541,13 @@ func (s *Server) handleOverview(w http.ResponseWriter, r *http.Request) {
 		out = append(out, overviewNode{View: v, Alerts: computeAlerts(v, set)})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"nodes":       out,
-		"settings":    set,
-		"has_webhook": strings.TrimSpace(set.Webhook) != "",
-		"has_ai_key":  strings.TrimSpace(set.AIKey) != "",
-		"version":     s.version,
+		"nodes":         out,
+		"settings":      set,
+		"has_webhook":   strings.TrimSpace(set.Webhook) != "",
+		"has_smtp":      set.SMTPEnabled(),
+		"has_smtp_pass": strings.TrimSpace(set.SMTPPass) != "",
+		"has_ai_key":    strings.TrimSpace(set.AIKey) != "",
+		"version":       s.version,
 	})
 }
 

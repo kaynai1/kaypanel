@@ -64,10 +64,31 @@ func nodeMetrics(v node.View, set config.Settings) []metric {
 	return out
 }
 
+func notifyConfigured(set config.Settings) bool {
+	return strings.TrimSpace(set.Webhook) != "" || set.SMTPEnabled()
+}
+
+func (e *Engine) send(ctx context.Context, set config.Settings, title, body string) {
+	if strings.TrimSpace(set.Webhook) != "" {
+		cctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+		_ = notify.Send(cctx, set.Webhook, title, body)
+		cancel()
+	}
+	if set.SMTPEnabled() {
+		cctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+		_ = notify.SendMail(cctx, notify.MailConfig{
+			Host: set.SMTPHost, Port: set.SMTPPort, Mode: set.SMTPMode,
+			User: set.SMTPUser, Pass: set.SMTPPass,
+			From: set.SMTPFrom, To: []string{set.SMTPTo},
+		}, title, body)
+		cancel()
+	}
+}
+
 func (e *Engine) tick(ctx context.Context) {
 	set := e.store.Settings()
 	e.checkDaily(ctx, set)
-	if strings.TrimSpace(set.Webhook) == "" {
+	if !notifyConfigured(set) {
 		return
 	}
 	views := e.mgr.Views()
@@ -101,13 +122,11 @@ func (e *Engine) tick(ctx context.Context) {
 	if len(lines) == 0 {
 		return
 	}
-	cctx, cancel := context.WithTimeout(ctx, 20*time.Second)
-	defer cancel()
-	_ = notify.Send(cctx, set.Webhook, "KayPanel 告警 · "+time.Now().Format("01-02 15:04"), strings.Join(lines, "\n"))
+	e.send(ctx, set, "KayPanel 告警 · "+time.Now().Format("01-02 15:04"), strings.Join(lines, "\n"))
 }
 
 func (e *Engine) checkDaily(ctx context.Context, set config.Settings) {
-	if !set.DailyReport || strings.TrimSpace(set.Webhook) == "" {
+	if !set.DailyReport || !notifyConfigured(set) {
 		return
 	}
 	now := time.Now()
@@ -163,7 +182,5 @@ func (e *Engine) checkDaily(ctx context.Context, set config.Settings) {
 	}
 	title := "KayPanel 每日早报 · " + now.Format("01-02")
 	body := fmt.Sprintf("在线 %d/%d 台\n%s", online, total, strings.Join(lines, "\n"))
-	cctx, cancel := context.WithTimeout(ctx, 20*time.Second)
-	defer cancel()
-	_ = notify.Send(cctx, set.Webhook, title, body)
+	e.send(ctx, set, title, body)
 }

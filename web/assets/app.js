@@ -37,6 +37,8 @@ const state = {
   audit: [],
   auditAt: 0,
   hasWebhook: false,
+  hasSMTP: false,
+  hasSMTPPass: false,
   hasAIKey: false,
   aiMessages: [],
   aiBusy: false,
@@ -1158,6 +1160,8 @@ async function loadOverview(render = true) {
     state.nodes = data.nodes || [];
     state.settings = data.settings || state.settings;
     if (typeof data.has_webhook === 'boolean') state.hasWebhook = data.has_webhook;
+    if (typeof data.has_smtp === 'boolean') state.hasSMTP = data.has_smtp;
+    if (typeof data.has_smtp_pass === 'boolean') state.hasSMTPPass = data.has_smtp_pass;
     if (typeof data.has_ai_key === 'boolean') state.hasAIKey = data.has_ai_key;
     if (data.version) state.version = data.version;
     ensureSelected();
@@ -5375,8 +5379,15 @@ function settingsPayload(extra) {
     daily_hour: num('#dailyHour', s.daily_hour == null ? 8 : s.daily_hour),
     ai_base: $('#aiBase') ? $('#aiBase').value.trim() : (s.ai_base || ''),
     ai_model: $('#aiModel') ? $('#aiModel').value.trim() : (s.ai_model || ''),
+    smtp_host: $('#smtpHost') ? $('#smtpHost').value.trim() : (s.smtp_host || ''),
+    smtp_port: $('#smtpPort') ? (Number($('#smtpPort').value) || 0) : (s.smtp_port || 0),
+    smtp_mode: $('#smtpMode') ? $('#smtpMode').value : (s.smtp_mode || 'ssl'),
+    smtp_user: $('#smtpUser') ? $('#smtpUser').value.trim() : (s.smtp_user || ''),
+    smtp_from: $('#smtpFrom') ? $('#smtpFrom').value.trim() : (s.smtp_from || ''),
+    smtp_to: $('#smtpTo') ? $('#smtpTo').value.trim() : (s.smtp_to || ''),
   };
   if ($('#webhookUrl') && $('#webhookUrl').value.trim()) payload.webhook = $('#webhookUrl').value.trim();
+  if ($('#smtpPass') && $('#smtpPass').value) payload.smtp_pass = $('#smtpPass').value;
   if ($('#aiKey') && $('#aiKey').value.trim()) payload.ai_key = $('#aiKey').value.trim();
   return Object.assign(payload, extra || {});
 }
@@ -5400,9 +5411,18 @@ async function saveSettings(payload, okText) {
       cpu_alert: payload.cpu_alert, mem_alert: payload.mem_alert, disk_alert: payload.disk_alert,
       daily_report: payload.daily_report, daily_hour: payload.daily_hour,
       ai_base: payload.ai_base, ai_model: payload.ai_model,
+      smtp_host: payload.smtp_host, smtp_port: payload.smtp_port, smtp_mode: payload.smtp_mode,
+      smtp_user: payload.smtp_user, smtp_from: payload.smtp_from, smtp_to: payload.smtp_to,
     });
     if (payload.webhook) state.hasWebhook = true;
     if (payload.clear_webhook) state.hasWebhook = false;
+    if (payload.clear_smtp || !payload.smtp_host || !payload.smtp_to) {
+      state.hasSMTP = false;
+      state.hasSMTPPass = false;
+    } else {
+      state.hasSMTP = true;
+      if (payload.smtp_pass) state.hasSMTPPass = true;
+    }
     if (payload.ai_key) state.hasAIKey = true;
     if (payload.clear_ai_key) state.hasAIKey = false;
     toast(okText || '已保存', 'success');
@@ -5440,6 +5460,8 @@ function renderSettings() {
   const page = $('#page');
   const hour = Number(state.settings.daily_hour);
   const dailyHour = Number.isFinite(hour) ? hour : 8;
+  const smtpMode = ['ssl', 'starttls', 'plain'].includes(state.settings.smtp_mode) ? state.settings.smtp_mode : 'ssl';
+  const smtpPort = Number(state.settings.smtp_port) || ({ ssl: 465, starttls: 587, plain: 25 }[smtpMode]);
   const hourOptions = Array.from({ length: 24 }, (_, h) =>
     `<option value="${h}" ${h === dailyHour ? 'selected' : ''}>${String(h).padStart(2, '0')}:00</option>`).join('');
   page.innerHTML = `
@@ -5456,7 +5478,7 @@ function renderSettings() {
     <div class="settings-cols">
       <div class="settings-col">
         <div class="card settings-card" id="setThresholds">
-          ${settingHead('activity', '告警阈值', '超过阈值时节点卡片高亮，并可通过 Webhook 推送')}
+          ${settingHead('activity', '告警阈值', '超过阈值时节点卡片高亮，并可通过 Webhook 或邮件推送')}
           <div class="form-grid three">
             <div class="field"><label>CPU %</label><input type="number" id="thCpu" min="1" max="100" value="${Number(state.settings.cpu_alert) || 90}"></div>
             <div class="field"><label>内存 %</label><input type="number" id="thMem" min="1" max="100" value="${Number(state.settings.mem_alert) || 90}"></div>
@@ -5465,7 +5487,7 @@ function renderSettings() {
           <button class="btn" id="saveThresholds">保存阈值</button>
         </div>
         <div class="card settings-card" id="setNotify">
-          ${settingHead('bell', '通知推送', '阈值告警只推一次，恢复时再通知；支持企业微信、钉钉、飞书、Bark、Server酱等十余种渠道')}
+          ${settingHead('bell', '通知推送', '阈值告警只推一次，恢复时再通知；Webhook 与 SMTP 邮件可同时使用')}
           <div class="form-grid">
             <div class="field full">
               <label>Webhook 地址</label>
@@ -5475,12 +5497,29 @@ function renderSettings() {
                 <div class="hint">企业微信 / 钉钉 / 飞书 / Slack / Discord 粘贴机器人 Webhook；手机推送：Bark 填 https://api.day.app/设备Key，Server酱 填 https://sctapi.ftqq.com/SENDKEY.send，PushPlus 填 https://www.pushplus.plus/send?token=TOKEN，ntfy 填 https://ntfy.sh/主题，Gotify 填 https://你的域名/message?token=TOKEN，Telegram 填 https://api.telegram.org/botTOKEN/sendMessage?chat_id=ID</div>
               </details>
             </div>
+            <div class="field full">
+              <label>邮件通道（SMTP，可选）</label>
+              <div class="hint">告警与每日早报会同时发到 Webhook 和邮件。CyberPanel 等发信服务需先添加发件域名并配置 SPF/DKIM/DMARC；Cloudflare 里的邮件记录请设为「仅 DNS」。</div>
+            </div>
+            <div class="field"><label>SMTP 服务器</label><input type="text" id="smtpHost" autocomplete="off" value="${esc(state.settings.smtp_host || '')}" placeholder="smtp.example.com"></div>
+            <div class="field"><label>端口</label><input type="number" id="smtpPort" min="1" max="65535" value="${smtpPort}"></div>
+            <div class="field"><label>加密方式</label><select id="smtpMode">
+              <option value="ssl" ${smtpMode === 'ssl' ? 'selected' : ''}>SSL/TLS（465）</option>
+              <option value="starttls" ${smtpMode === 'starttls' ? 'selected' : ''}>STARTTLS（587）</option>
+              <option value="plain" ${smtpMode === 'plain' ? 'selected' : ''}>不加密（25，仅内网）</option>
+            </select></div>
+            <div class="field"><label>用户名</label><input type="text" id="smtpUser" autocomplete="off" value="${esc(state.settings.smtp_user || '')}" placeholder="可选"></div>
+            <div class="field"><label>密码 / API Key</label><input type="password" id="smtpPass" autocomplete="new-password" placeholder="${state.hasSMTPPass ? '已配置，留空保持不变' : 'SMTP 密码'}"></div>
+            <div class="field"><label>发件人</label><input type="text" id="smtpFrom" autocomplete="off" value="${esc(state.settings.smtp_from || '')}" placeholder="notify@yourdomain.com"></div>
+            <div class="field full"><label>收件人</label><input type="text" id="smtpTo" autocomplete="off" value="${esc(state.settings.smtp_to || '')}" placeholder="you@qq.com，多个用逗号分隔"></div>
             <div class="field"><label>每日早报</label><label class="check"><input type="checkbox" id="dailyOn" ${state.settings.daily_report ? 'checked' : ''}>每天推送节点运行概况</label></div>
             <div class="field"><label>推送时间</label><select id="dailyHour">${hourOptions}</select></div>
           </div>
           <div class="head-actions">
             <button class="btn" id="saveNotify">保存通知设置</button>
-            <button class="btn ghost" id="testNotify">测试推送</button>
+            <button class="btn ghost" id="testNotify">测试 Webhook</button>
+            <button class="btn ghost" id="testMail">测试邮件</button>
+            ${state.hasSMTP ? '<button class="btn sm ghost" id="clearSMTP">清除邮件通道</button>' : ''}
             ${state.hasWebhook ? '<button class="btn sm ghost" id="clearWebhook">清除 Webhook</button>' : ''}
           </div>
         </div>
@@ -5614,12 +5653,49 @@ function renderSettings() {
     btn.disabled = true;
     try {
       const hook = $('#webhookUrl').value.trim();
-      const d = await api('/api/notify/test', { method: 'POST', body: JSON.stringify(hook ? { webhook: hook } : {}) });
+      await api('/api/notify/test', { method: 'POST', body: JSON.stringify({ channel: 'webhook', webhook: hook || undefined }) });
       toast('测试消息已发送', 'success');
     } catch (e) {
       toast(e.message, 'error', 7000);
     }
     btn.disabled = false;
+  });
+  $('#testMail').addEventListener('click', async () => {
+    const btn = $('#testMail');
+    btn.disabled = true;
+    try {
+      const smtp = {
+        host: $('#smtpHost').value.trim(),
+        port: Number($('#smtpPort').value) || 0,
+        mode: $('#smtpMode').value,
+        user: $('#smtpUser').value.trim(),
+        pass: $('#smtpPass').value,
+        from: $('#smtpFrom').value.trim(),
+        to: $('#smtpTo').value.trim(),
+      };
+      if (!smtp.host || !smtp.from || !smtp.to) {
+        toast('请先填写 SMTP 服务器、发件人和收件人', 'error');
+        btn.disabled = false;
+        return;
+      }
+      await api('/api/notify/test', { method: 'POST', body: JSON.stringify({ channel: 'smtp', smtp }) });
+      toast('测试邮件已发送，请检查收件箱和垃圾箱', 'success', 6000);
+    } catch (e) {
+      toast(e.message, 'error', 7000);
+    }
+    btn.disabled = false;
+  });
+  const smtpModeSel = $('#smtpMode');
+  const smtpPortEl = $('#smtpPort');
+  smtpModeSel.addEventListener('change', () => {
+    const defaults = { ssl: 465, starttls: 587, plain: 25 };
+    const cur = Number(smtpPortEl.value);
+    if (!cur || [465, 587, 25].includes(cur)) smtpPortEl.value = defaults[smtpModeSel.value] || 465;
+  });
+  const clearSMTP = $('#clearSMTP');
+  if (clearSMTP) clearSMTP.addEventListener('click', async () => {
+    if (!await confirmDialog('清除邮件通道', '清除后告警与每日早报将不再发送邮件，确定继续？', '清除', true)) return;
+    if (await saveSettings(settingsPayload({ clear_smtp: true }), '邮件通道已清除')) renderSettings();
   });
   const clearHook = $('#clearWebhook');
   if (clearHook) clearHook.addEventListener('click', async () => {
@@ -7829,6 +7905,8 @@ async function boot() {
     state.version = me.version || '';
     state.settings = me.settings || state.settings;
     state.hasWebhook = !!me.has_webhook;
+    state.hasSMTP = !!me.has_smtp;
+    state.hasSMTPPass = !!me.has_smtp_pass;
     state.hasAIKey = !!me.has_ai_key;
   } catch (e) {
     showLogin();

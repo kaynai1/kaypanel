@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 
 	"golang.org/x/crypto/bcrypt"
@@ -43,6 +44,14 @@ type Settings struct {
 	Webhook     string `yaml:"webhook,omitempty" json:"-"`
 	DailyReport bool   `yaml:"daily_report,omitempty" json:"daily_report"`
 	DailyHour   int    `yaml:"daily_hour,omitempty" json:"daily_hour"`
+
+	SMTPHost string `yaml:"smtp_host,omitempty" json:"smtp_host"`
+	SMTPPort int    `yaml:"smtp_port,omitempty" json:"smtp_port"`
+	SMTPMode string `yaml:"smtp_mode,omitempty" json:"smtp_mode"`
+	SMTPUser string `yaml:"smtp_user,omitempty" json:"smtp_user"`
+	SMTPPass string `yaml:"smtp_pass,omitempty" json:"-"`
+	SMTPFrom string `yaml:"smtp_from,omitempty" json:"smtp_from"`
+	SMTPTo   string `yaml:"smtp_to,omitempty" json:"smtp_to"`
 
 	AIBase  string `yaml:"ai_base,omitempty" json:"ai_base"`
 	AIModel string `yaml:"ai_model,omitempty" json:"ai_model"`
@@ -172,6 +181,10 @@ func (s *Store) Settings() Settings {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.cfg.Settings
+}
+
+func (s Settings) SMTPEnabled() bool {
+	return strings.TrimSpace(s.SMTPHost) != "" && strings.TrimSpace(s.SMTPTo) != ""
 }
 
 func (s *Store) SetSettings(v Settings) error {

@@ -16,9 +16,48 @@ import (
 func (s *Server) handleNotifyTest(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Webhook string `json:"webhook"`
+		Channel string `json:"channel"`
+		SMTP    *struct {
+			Host string `json:"host"`
+			Port int    `json:"port"`
+			Mode string `json:"mode"`
+			User string `json:"user"`
+			Pass string `json:"pass"`
+			From string `json:"from"`
+			To   string `json:"to"`
+		} `json:"smtp"`
 	}
 	_ = readJSON(r, &req)
 	set := s.store.Settings()
+	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+	defer cancel()
+	stamp := time.Now().Format("2006-01-02 15:04:05")
+
+	if strings.EqualFold(strings.TrimSpace(req.Channel), "smtp") {
+		mc := notify.MailConfig{
+			Host: set.SMTPHost, Port: set.SMTPPort, Mode: set.SMTPMode,
+			User: set.SMTPUser, Pass: set.SMTPPass,
+			From: set.SMTPFrom, To: []string{set.SMTPTo},
+		}
+		if req.SMTP != nil && strings.TrimSpace(req.SMTP.Host) != "" {
+			mc = notify.MailConfig{
+				Host: req.SMTP.Host, Port: req.SMTP.Port, Mode: req.SMTP.Mode,
+				User: req.SMTP.User, Pass: req.SMTP.Pass,
+				From: req.SMTP.From, To: []string{req.SMTP.To},
+			}
+			if strings.TrimSpace(mc.Pass) == "" && strings.TrimSpace(mc.Host) == set.SMTPHost && strings.TrimSpace(mc.User) == set.SMTPUser {
+				mc.Pass = set.SMTPPass
+			}
+		}
+		if err := notify.SendMail(ctx, mc, "KayPanel 测试邮件", "如果你看到这封邮件，说明 SMTP 邮件通道配置成功。\n"+stamp); err != nil {
+			writeErr(w, http.StatusBadGateway, err.Error())
+			return
+		}
+		s.audit.Add("admin", "", "邮件测试", "")
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+		return
+	}
+
 	hook := strings.TrimSpace(req.Webhook)
 	if hook == "" {
 		hook = strings.TrimSpace(set.Webhook)
@@ -27,9 +66,7 @@ func (s *Server) handleNotifyTest(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "请先填写并保存 Webhook 地址")
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
-	defer cancel()
-	if err := notify.Send(ctx, hook, "KayPanel 测试推送", "如果你看到这条消息，说明 Webhook 配置成功。\n"+time.Now().Format("2006-01-02 15:04:05")); err != nil {
+	if err := notify.Send(ctx, hook, "KayPanel 测试推送", "如果你看到这条消息，说明 Webhook 配置成功。\n"+stamp); err != nil {
 		writeErr(w, http.StatusBadGateway, err.Error())
 		return
 	}
